@@ -1,0 +1,19 @@
+# Build artifacts
+/bin/
+/forgedb
+/forgedb.exe
+*.exe
+*.test
+
+# Data directories
+/data/
+*.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
