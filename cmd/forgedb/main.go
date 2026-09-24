@@ -1,7 +1,7 @@
 package main
 
-import "fmt"
+import "github.com/Kushall-07/forgedb/internal/metrics"
 
 func main() {
-	fmt.Println("ForgeDB starting...")
+	metrics.Info("ForgeDB starting...")
 }
