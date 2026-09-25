@@ -1,13 +1,14 @@
 // Package storage defines ForgeDB's storage-engine boundary and its
-// Phase 1 implementation.
+// current implementation: a WAL-backed MemStore (see memstore.go and the
+// wal subpackage).
 //
 // This package is intentionally ignorant of Raft: it knows nothing about
 // terms, log indices, leaders, quorums, or how a command arrived here. It
 // only implements key/value storage semantics. A future State Machine
 // package will sit between Raft and Store, translating committed Raft log
 // entries into calls against this interface. That boundary lets later
-// phases add a WAL and SSTables underneath Store without changing this
-// contract or making Raft aware of storage internals.
+// phases add SSTables underneath Store without changing this contract or
+// making Raft aware of storage internals.
 package storage
 
 import "errors"

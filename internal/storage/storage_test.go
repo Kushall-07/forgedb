@@ -8,7 +8,10 @@ import (
 
 func newTestStore(t *testing.T) Store {
 	t.Helper()
-	s := NewMemStore()
+	s, err := NewMemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
