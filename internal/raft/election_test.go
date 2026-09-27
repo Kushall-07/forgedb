@@ -34,7 +34,7 @@ func TestNode_ElectionTimeout_BecomesCandidate(t *testing.T) {
 		ID: "solo", Peers: []string{"ghost"}, Transport: tr,
 		ElectionTickMin: 3, ElectionTickMax: 3,
 	}
-	node := NewNode(opts)
+	node := mustNewNode(t, opts)
 	tr.Register("solo", node)
 
 	for i := 0; i < 2; i++ {
@@ -64,7 +64,7 @@ func TestNode_Candidate_VotesForSelf(t *testing.T) {
 		ID: "solo", Peers: []string{"ghost"}, Transport: tr,
 		ElectionTickMin: 1, ElectionTickMax: 1,
 	}
-	node := NewNode(opts)
+	node := mustNewNode(t, opts)
 	tr.Register("solo", node)
 
 	node.Tick()
@@ -104,7 +104,7 @@ func TestNode_MajorityVotes_BecomesLeader(t *testing.T) {
 
 func TestNode_SingleNodeCluster_ElectsSelfImmediately(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "solo", Transport: tr, ElectionTickMin: 2, ElectionTickMax: 2})
+	node := mustNewNode(t, Options{ID: "solo", Transport: tr, ElectionTickMin: 2, ElectionTickMax: 2})
 	tr.Register("solo", node)
 
 	node.Tick()
@@ -148,7 +148,7 @@ func TestNode_ElectionFailure_NoMajority(t *testing.T) {
 
 func TestNode_OneVotePerTerm(t *testing.T) {
 	tr := NewInMemoryTransport()
-	voter := NewNode(Options{ID: "voter", Peers: []string{"a", "b"}, Transport: tr})
+	voter := mustNewNode(t, Options{ID: "voter", Peers: []string{"a", "b"}, Transport: tr})
 	tr.Register("voter", voter)
 
 	first := voter.HandleRequestVote(RequestVoteArgs{Term: 1, CandidateID: "a"})
@@ -173,7 +173,7 @@ func TestNode_OneVotePerTerm(t *testing.T) {
 
 func TestNode_HigherTermRequestVote_StepsDownAndUpdatesTerm(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr, ElectionTickMin: 1, ElectionTickMax: 1})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr, ElectionTickMin: 1, ElectionTickMax: 1})
 	tr.Register("n", node)
 
 	// Make it a candidate at term 1 first.
@@ -200,7 +200,7 @@ func TestNode_HigherTermRequestVote_StepsDownAndUpdatesTerm(t *testing.T) {
 
 func TestNode_StaleRequestVote_Rejected(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr})
 	tr.Register("n", node)
 
 	// Bump the node's term up first (simulating it having seen a later
@@ -239,7 +239,7 @@ func TestNode_MajorityCalculation(t *testing.T) {
 		for i := range peers {
 			peers[i] = "p"
 		}
-		n := NewNode(Options{ID: "n", Peers: peers, Transport: NewInMemoryTransport(), Rand: rand.New(rand.NewSource(1))})
+		n := mustNewNode(t, Options{ID: "n", Peers: peers, Transport: NewInMemoryTransport(), Rand: rand.New(rand.NewSource(1))})
 		if got := n.majority(); got != tt.want {
 			t.Errorf("majority() with %d peers (cluster size %d) = %d, want %d", tt.peers, tt.peers+1, got, tt.want)
 		}

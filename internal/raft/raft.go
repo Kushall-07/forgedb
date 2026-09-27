@@ -17,6 +17,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -98,6 +99,13 @@ type Options struct {
 	// new source seeded from the current time; tests that need
 	// reproducible timeouts can supply their own.
 	Rand *rand.Rand
+
+	// Persister makes currentTerm, votedFor, and the log durable across a
+	// restart -- see Persister and docs/raft/phase6-raft-persistence.md.
+	// It defaults to a no-op in-memory-only persister when left nil,
+	// which reproduces Phase 5's original behavior exactly: a Node that
+	// forgets everything if the process restarts.
+	Persister Persister
 }
 
 // Node is a single participant in Raft consensus: it tracks the state
@@ -107,12 +115,15 @@ type Options struct {
 // HandleRequestVote / HandleAppendEntries, and accepts new commands from
 // a client via Propose.
 //
-// Node's state is entirely in memory; Phase 6 will add persistence for
-// currentTerm, votedFor, and the log, which must survive a restart for
-// Raft's safety guarantees to hold across crashes. Without that, a
-// restarted Node in Phase 5 has no memory of a previous run -- it is only
-// safe to use a Node for the duration of a single process's simulated
-// cluster.
+// currentTerm, votedFor, and the log are durably persisted via
+// Options.Persister every time they change (see persistLocked and its
+// call sites), so a Node constructed with a real Persister (FilePersister
+// or a MemoryPersister shared across two NewNode calls) survives a
+// restart without forgetting them -- see
+// docs/raft/phase6-raft-persistence.md for exactly what is and isn't
+// persisted and why. commitIndex, lastApplied, role, timers, and
+// leader-only replication state remain volatile by design and are always
+// reset by NewNode; a restarted Node always starts as a Follower.
 //
 // A Node is safe for concurrent use. All RPC handling, election timeouts,
 // heartbeats, replication, and Propose calls are synchronized through a
@@ -158,6 +169,12 @@ type Node struct {
 	transport Transport
 	rnd       *rand.Rand
 
+	// persister durably saves currentTerm, votedFor, and log every time
+	// one of them changes (see persistLocked). It is never nil -- NewNode
+	// defaults it to discardPersister{} when Options.Persister is left
+	// unset.
+	persister Persister
+
 	// commitCh receives a non-blocking notification every time
 	// commitIndex advances, so a caller (or, eventually, a state
 	// machine) can wait for new committed entries instead of polling.
@@ -176,11 +193,27 @@ type Node struct {
 	stopOnce sync.Once
 }
 
-// NewNode constructs a Node from opts. The node starts as a Follower with
-// an empty log and term 0, and is not yet registered with its transport
-// or running any background ticking -- see Options.Transport, Register,
-// and Run.
-func NewNode(opts Options) *Node {
+// NewNode constructs a Node from opts. If opts.Persister has previously
+// saved state (from an earlier Node instance -- simulating an earlier
+// process that has since crashed or been stopped), that currentTerm,
+// votedFor, and log are restored; otherwise the node starts fresh, with
+// an empty log and term 0. Either way, every volatile field (commitIndex,
+// lastApplied, role, timers, and leader-only replication state) starts at
+// its zero value and the node always starts as a Follower -- a restart
+// never resumes an old leadership, in-flight replication, or claim about
+// what was committed (see docs/raft/phase6-raft-persistence.md).
+//
+// NewNode returns an error if opts.Persister reports that a previously
+// saved state exists but is corrupt (see ErrCorrupt): this is
+// deliberately not the same as "no state", and Phase 6 treats it as a
+// startup failure rather than silently discarding the corrupt state and
+// proceeding as a fresh node, which could otherwise let this node forget
+// a vote or log entries it had already durably promised to remember.
+//
+// A successfully constructed Node is not yet registered with its
+// transport or running any background ticking -- see Options.Transport,
+// Register, and Run.
+func NewNode(opts Options) (*Node, error) {
 	electionMin := opts.ElectionTickMin
 	if electionMin == 0 {
 		electionMin = DefaultElectionTickMin
@@ -197,22 +230,71 @@ func NewNode(opts Options) *Node {
 	if rnd == nil {
 		rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
+	persister := opts.Persister
+	if persister == nil {
+		persister = discardPersister{}
+	}
 
 	n := &Node{
 		id:              opts.ID,
 		peers:           append([]string(nil), opts.Peers...),
-		log:             NewLog(),
 		role:            Follower,
 		transport:       opts.Transport,
 		electionTickMin: electionMin,
 		electionTickMax: electionMax,
 		heartbeatTick:   heartbeatTick,
 		rnd:             rnd,
+		persister:       persister,
 		commitCh:        make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
 	}
+
+	state, err := persister.LoadState()
+	switch {
+	case errors.Is(err, ErrNoState):
+		n.log = NewLog()
+	case err != nil:
+		return nil, fmt.Errorf("raft: load persisted state: %w", err)
+	default:
+		n.currentTerm = state.CurrentTerm
+		n.votedFor = state.VotedFor
+		n.log = newLogFromEntries(state.Log)
+	}
+
 	n.resetElectionTimerLocked()
-	return n
+	return n, nil
+}
+
+// persistLocked durably saves the node's current currentTerm, votedFor,
+// and log via n.persister. It must be called with n.mu held, and only
+// after those three fields already reflect the state to be saved.
+//
+// Every call site (becomeFollowerLocked, startElectionLocked,
+// HandleRequestVote, HandleAppendEntries, Propose) snapshots the
+// affected field(s) before mutating them and restores that snapshot if
+// persistLocked returns an error, so a failed persist never leaves this
+// node's in-memory state ahead of what is actually durable on disk --
+// there is no window in which this node could act on (grant a
+// conflicting vote, report an entry as replicated, become a candidate
+// in) a term, vote, or log entry that a crash immediately afterward would
+// cause it to forget.
+func (n *Node) persistLocked() error {
+	logCopy := append([]LogEntry(nil), n.log.entries[1:]...) // exclude the index-0 sentinel
+	return n.persister.SaveState(PersistentState{
+		CurrentTerm: n.currentTerm,
+		VotedFor:    n.votedFor,
+		Log:         logCopy,
+	})
+}
+
+// newLogFromEntries reconstructs a Log from a persisted (1-indexed, no
+// sentinel) entry slice, prepending the fixed index-0 sentinel that every
+// in-memory Log has (see Log).
+func newLogFromEntries(entries []LogEntry) *Log {
+	l := &Log{entries: make([]LogEntry, 0, len(entries)+1)}
+	l.entries = append(l.entries, LogEntry{Index: 0, Term: 0})
+	l.entries = append(l.entries, entries...)
+	return l
 }
 
 // ID returns the node's own ID.
@@ -265,13 +347,28 @@ func (n *Node) resetElectionTimerLocked() {
 // monotonicity is enforced and a stale leader or candidate is forced to
 // stand down (Raft's "leader authority" and "term monotonicity"
 // invariants). n.mu must be held.
-func (n *Node) becomeFollowerLocked(term uint64) {
+//
+// The new term (and the reset vote that goes with it -- a new term means
+// this node has not voted in it yet) is persisted before any of the rest
+// of the step-down happens. If persistence fails, the term/vote change is
+// rolled back and an error is returned: the node behaves as though it
+// never saw evidence of the higher term at all, rather than risk acting
+// on (or telling an RPC caller about) a term it cannot durably remember.
+// The caller -- another node -- will simply see this RPC rejected or
+// retried, exactly as if the message had been dropped.
+func (n *Node) becomeFollowerLocked(term uint64) error {
+	oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 	n.currentTerm = term
 	n.votedFor = ""
+	if err := n.persistLocked(); err != nil {
+		n.currentTerm, n.votedFor = oldTerm, oldVotedFor
+		return err
+	}
 	n.role = Follower
 	n.leaderID = ""
 	n.votesReceived = nil
 	n.resetElectionTimerLocked()
+	return nil
 }
 
 // trackRPC runs fn in a new goroutine, registering it with n.inflight so

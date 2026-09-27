@@ -117,7 +117,7 @@ func TestNode_OldLeaderStepsDown_AfterPartitionHeals(t *testing.T) {
 
 func TestNode_AppendEntries_StaleTermRejected(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr})
 	tr.Register("n", node)
 	node.HandleRequestVote(RequestVoteArgs{Term: 5, CandidateID: "a"}) // bump term to 5
 
@@ -137,7 +137,7 @@ func TestNode_AppendEntries_StaleTermRejected(t *testing.T) {
 
 func TestNode_AppendEntries_PrevLogIndexMismatch(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr})
 	tr.Register("n", node)
 
 	reply := node.HandleAppendEntries(AppendEntriesArgs{
@@ -156,7 +156,7 @@ func TestNode_AppendEntries_PrevLogIndexMismatch(t *testing.T) {
 
 func TestNode_AppendEntries_PrevLogTermMismatch(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr})
 	tr.Register("n", node)
 
 	ok := node.HandleAppendEntries(AppendEntriesArgs{
@@ -187,7 +187,7 @@ func TestNode_AppendEntries_PrevLogTermMismatch(t *testing.T) {
 
 func TestNode_AppendEntries_ConflictTruncation(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr})
 	tr.Register("n", node)
 
 	node.HandleAppendEntries(AppendEntriesArgs{
@@ -220,7 +220,7 @@ func TestNode_AppendEntries_ConflictTruncation(t *testing.T) {
 
 func TestNode_AppendEntries_MatchingPrefixPreserved(t *testing.T) {
 	tr := NewInMemoryTransport()
-	node := NewNode(Options{ID: "n", Peers: []string{"a"}, Transport: tr})
+	node := mustNewNode(t, Options{ID: "n", Peers: []string{"a"}, Transport: tr})
 	tr.Register("n", node)
 
 	entries := []LogEntry{

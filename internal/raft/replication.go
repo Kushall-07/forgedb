@@ -1,5 +1,7 @@
 package raft
 
+import "fmt"
+
 // broadcastAppendEntriesLocked sends one round of AppendEntries to every
 // peer: a heartbeat (no entries) if the peer is already fully caught up,
 // or replication of whatever log suffix the peer is missing according to
@@ -48,7 +50,9 @@ func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArg
 	defer n.mu.Unlock()
 
 	if reply.Term > n.currentTerm {
-		n.becomeFollowerLocked(reply.Term)
+		// Best-effort, as in sendRequestVote: becomeFollowerLocked
+		// already leaves state untouched on a persistence failure.
+		_ = n.becomeFollowerLocked(reply.Term)
 		return
 	}
 	// This reply may be stale: we may no longer be leader, or a newer
@@ -132,16 +136,21 @@ func (n *Node) notifyCommitLocked() {
 // rejected with Success=false and the log is left untouched, so the
 // leader's next retry (with a lower PrevLogIndex) is the only thing that
 // can ever change it. On success, Log.AppendAfter performs the
-// conflict-resolution / matching-prefix-preservation append (see log.go),
-// and commitIndex is advanced to the lesser of the leader's LeaderCommit
-// and this node's own new last log index -- never further than what this
-// node has actually just accepted into its log.
+// conflict-resolution / matching-prefix-preservation append (see log.go);
+// if that actually changed the log, the new log is persisted before this
+// node replies Success=true, so a leader that has heard this entry was
+// accepted can rely on this follower not having silently forgotten it in
+// a crash. commitIndex is then advanced to the lesser of the leader's
+// LeaderCommit and this node's own new last log index -- never further
+// than what this node has actually just accepted into its log.
 func (n *Node) HandleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	if args.Term > n.currentTerm {
-		n.becomeFollowerLocked(args.Term)
+		if err := n.becomeFollowerLocked(args.Term); err != nil {
+			return AppendEntriesReply{Term: n.currentTerm, Success: false}
+		}
 	}
 
 	if args.Term < n.currentTerm {
@@ -156,7 +165,13 @@ func (n *Node) HandleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 		return AppendEntriesReply{Term: n.currentTerm, Success: false}
 	}
 
-	n.log.AppendAfter(args.PrevLogIndex, args.Entries)
+	oldEntries := append([]LogEntry(nil), n.log.entries...)
+	if n.log.AppendAfter(args.PrevLogIndex, args.Entries) {
+		if err := n.persistLocked(); err != nil {
+			n.log.entries = oldEntries
+			return AppendEntriesReply{Term: n.currentTerm, Success: false}
+		}
+	}
 
 	if args.LeaderCommit > n.commitIndex {
 		lastNew := args.PrevLogIndex + uint64(len(args.Entries))
@@ -185,6 +200,14 @@ func (n *Node) HandleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 // Propose returns ErrNotLeader, appending nothing, if this node is not
 // currently the leader. Phase 5 does not implement client redirection to
 // the real leader; that is left to a future phase.
+//
+// The new entry is persisted before Propose broadcasts it to any peer or
+// returns to the caller: an entry this node cannot durably remember
+// having appended must not be treated as even locally recorded, let alone
+// replicated. If persistence fails, the append is rolled back and Propose
+// returns that error instead of an index/term -- the caller sees the
+// proposal as having not happened at all, and may retry once persistence
+// recovers.
 func (n *Node) Propose(command Command) (index uint64, term uint64, err error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -194,8 +217,14 @@ func (n *Node) Propose(command Command) (index uint64, term uint64, err error) {
 	}
 
 	entry := LogEntry{Term: n.currentTerm, Command: append(Command(nil), command...)}
+	oldLen := len(n.log.entries)
 	index = n.log.Append(entry)
 	term = n.currentTerm
+
+	if perr := n.persistLocked(); perr != nil {
+		n.log.entries = n.log.entries[:oldLen]
+		return 0, 0, fmt.Errorf("raft: persist proposed entry: %w", perr)
+	}
 
 	n.broadcastAppendEntriesLocked()
 	return index, term, nil

@@ -7,10 +7,26 @@ package raft
 // leader immediately without sending anything. n.mu must be held; it is
 // called from Tick when a Follower or Candidate's election timeout
 // elapses.
+//
+// The new term and self-vote are persisted before the node actually
+// becomes a Candidate or sends any RequestVote RPC: an election that this
+// node cannot durably remember starting must not proceed, since a crash
+// right afterward would let it vote for a different candidate in the same
+// term after restarting, violating one-vote-per-term. If persistence
+// fails, the term/vote bump is rolled back and the election is abandoned
+// for now -- the node stays a Follower, its election timer is left
+// un-reset, so Tick simply retries startElectionLocked on the very next
+// tick once persistence (hopefully) recovers.
 func (n *Node) startElectionLocked() {
+	oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 	n.currentTerm++
-	n.role = Candidate
 	n.votedFor = n.id
+	if err := n.persistLocked(); err != nil {
+		n.currentTerm, n.votedFor = oldTerm, oldVotedFor
+		return
+	}
+
+	n.role = Candidate
 	n.votesReceived = map[string]bool{n.id: true}
 	n.resetElectionTimerLocked()
 
@@ -52,7 +68,11 @@ func (n *Node) sendRequestVote(peer string, term, lastIndex, lastTerm uint64) {
 	defer n.mu.Unlock()
 
 	if reply.Term > n.currentTerm {
-		n.becomeFollowerLocked(reply.Term)
+		// Best-effort: becomeFollowerLocked already leaves state
+		// untouched on a persistence failure, so there is nothing
+		// further to do here -- this node will simply notice the higher
+		// term again the next time it hears from this or another peer.
+		_ = n.becomeFollowerLocked(reply.Term)
 		return
 	}
 	// The election this reply belongs to may already be over (we lost,
@@ -102,12 +122,23 @@ func (n *Node) becomeLeaderLocked() {
 // never sufficient. Granting a vote resets the election timer, since a
 // live candidate worth voting for is reason enough to defer this node's
 // own election.
+//
+// A term bump and a granted vote are each persisted before they take
+// effect (see becomeFollowerLocked and the persist below): if either
+// persist fails, that half of the RPC is treated as not having happened
+// and the vote is denied, so this node can never grant a vote (or report
+// having moved to a new term) that a crash immediately afterward would
+// cause it to forget -- the one-vote-per-term safety rule depends on
+// votedFor surviving every crash between granting a vote and the voter
+// next restarting.
 func (n *Node) HandleRequestVote(args RequestVoteArgs) RequestVoteReply {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	if args.Term > n.currentTerm {
-		n.becomeFollowerLocked(args.Term)
+		if err := n.becomeFollowerLocked(args.Term); err != nil {
+			return RequestVoteReply{Term: n.currentTerm, VoteGranted: false}
+		}
 	}
 
 	if args.Term < n.currentTerm {
@@ -121,7 +152,13 @@ func (n *Node) HandleRequestVote(args RequestVoteArgs) RequestVoteReply {
 		return RequestVoteReply{Term: n.currentTerm, VoteGranted: false}
 	}
 
+	oldVotedFor := n.votedFor
 	n.votedFor = args.CandidateID
+	if err := n.persistLocked(); err != nil {
+		n.votedFor = oldVotedFor
+		return RequestVoteReply{Term: n.currentTerm, VoteGranted: false}
+	}
+
 	n.resetElectionTimerLocked()
 	return RequestVoteReply{Term: n.currentTerm, VoteGranted: true}
 }

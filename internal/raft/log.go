@@ -114,7 +114,14 @@ func (l *Log) Range(from, to uint64) []LogEntry {
 // This is exactly the Raft log-matching / conflict-resolution rule: a
 // follower never blindly appends duplicate entries, and never discards
 // entries that already agree with the leader.
-func (l *Log) AppendAfter(prevIndex uint64, newEntries []LogEntry) {
+//
+// AppendAfter reports whether it actually mutated the log (truncated a
+// conflicting suffix and/or appended new entries), as opposed to being a
+// true no-op because every incoming entry already matched. Phase 6 uses
+// this to decide whether an AppendEntries call needs to durably persist
+// the log at all -- a pure heartbeat, or a retried RPC resending entries
+// the follower already has, needs no disk write.
+func (l *Log) AppendAfter(prevIndex uint64, newEntries []LogEntry) bool {
 	for i, e := range newEntries {
 		idx := prevIndex + 1 + uint64(i)
 		if idx < uint64(len(l.entries)) {
@@ -124,8 +131,9 @@ func (l *Log) AppendAfter(prevIndex uint64, newEntries []LogEntry) {
 			l.entries = l.entries[:idx]
 		}
 		l.appendFrom(idx, newEntries[i:])
-		return
+		return true
 	}
+	return false
 }
 
 // appendFrom appends entries to the log starting at index startIdx,

@@ -6,6 +6,20 @@ import (
 	"testing"
 )
 
+// mustNewNode calls NewNode and fails the test immediately if it returns
+// an error. Every test in this package that doesn't specifically exercise
+// NewNode's error path (see persistence_test.go) uses this instead of
+// calling NewNode directly, since none of them configure a Persister that
+// could ever cause NewNode to fail.
+func mustNewNode(t *testing.T, opts Options) *Node {
+	t.Helper()
+	n, err := NewNode(opts)
+	if err != nil {
+		t.Fatalf("NewNode(%+v): %v", opts, err)
+	}
+	return n
+}
+
 // newTestCluster builds n Nodes wired together through a shared
 // InMemoryTransport, with IDs "node0".."node{n-1}" and every node's Peers
 // set to every other node's ID. configure, if non-nil, is called with
@@ -43,7 +57,7 @@ func newTestCluster(t *testing.T, n int, configure func(id string, opts *Options
 		if configure != nil {
 			configure(id, &opts)
 		}
-		node := NewNode(opts)
+		node := mustNewNode(t, opts)
 		nodes[i] = node
 		tr.Register(id, node)
 	}
