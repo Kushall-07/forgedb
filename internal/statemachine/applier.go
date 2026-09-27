@@ -36,6 +36,12 @@ type Applier struct {
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
+
+	// runMu guards doneCh, which Run creates and closes when its
+	// background goroutine returns, and which Stop reads to know whether
+	// (and how) to wait for that goroutine -- see Run and Stop.
+	runMu  sync.Mutex
+	doneCh chan struct{}
 }
 
 // NewApplier returns an Applier that applies node's committed entries to
@@ -115,8 +121,19 @@ func (a *Applier) ApplyAvailable() (applied int, err error) {
 // commit notification, or never, if no further commits happen; a
 // production caller that needs to observe such failures should call
 // ApplyAvailable itself instead of relying on Run.
+//
+// Run is idempotent: calling it more than once starts at most one
+// background goroutine.
 func (a *Applier) Run() {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	if a.doneCh != nil {
+		return
+	}
+	done := make(chan struct{})
+	a.doneCh = done
 	go func() {
+		defer close(done)
 		a.ApplyAvailable()
 		for {
 			select {
@@ -129,8 +146,25 @@ func (a *Applier) Run() {
 	}()
 }
 
-// Stop halts the background goroutine started by Run, if any. It is safe
-// to call more than once, and safe to call even if Run was never called.
+// Stop halts the background goroutine started by Run, if any, and -- unlike
+// merely closing a channel -- blocks until that goroutine has actually
+// returned. This matters because the goroutine may be in the middle of
+// ApplyAvailable (and therefore in the middle of a Store.Put/Delete call)
+// at the moment Stop is called: closing stopCh alone only prevents the
+// *next* iteration of Run's loop from starting, it does not interrupt a
+// call already in progress. A caller that closes or otherwise tears down
+// the underlying Store as soon as Stop returns (see the composition root
+// in internal/dbnode) therefore never races an in-flight storage write.
+//
+// Stop is safe to call more than once, and safe to call even if Run was
+// never called (in which case it returns immediately, having waited on
+// nothing).
 func (a *Applier) Stop() {
 	a.stopOnce.Do(func() { close(a.stopCh) })
+	a.runMu.Lock()
+	done := a.doneCh
+	a.runMu.Unlock()
+	if done != nil {
+		<-done
+	}
 }

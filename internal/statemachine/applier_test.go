@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -342,5 +343,78 @@ func TestApplier_Run_CatchesUpInBackground(t *testing.T) {
 	got, err := cs.Get([]byte("x"))
 	if err != nil || !bytes.Equal(got, []byte("10")) {
 		t.Fatalf("Get(x) = %q, %v, want 10, nil", got, err)
+	}
+}
+
+// blockingStore wraps a real storage.Store, letting a test pause Put's
+// return until it explicitly says to continue -- used to prove Stop
+// actually waits for an in-flight ApplyAvailable call rather than merely
+// signaling it to stop before the next iteration.
+type blockingStore struct {
+	storage.Store
+	putEntered chan struct{}
+	release    chan struct{}
+	entered    sync.Once
+}
+
+func (s *blockingStore) Put(key, value []byte) error {
+	s.entered.Do(func() { close(s.putEntered) })
+	<-s.release
+	return s.Store.Put(key, value)
+}
+
+func TestApplier_Stop_WaitsForInFlightApplyBeforeReturning(t *testing.T) {
+	_, nodes := newRaftCluster(t, 3)
+	leader := nodes[0]
+	electLeader(t, leader)
+
+	base, err := storage.NewMemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	t.Cleanup(func() { base.Close() })
+	bs := &blockingStore{Store: base, putEntered: make(chan struct{}), release: make(chan struct{})}
+	sm := NewKVStateMachine(bs)
+	applier := NewApplier(leader, sm)
+
+	if _, _, err := leader.Propose(encodeOrFatal(t, NewPutCommand("c1", 1, []byte("x"), []byte("10")))); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	leader.Drain()
+
+	applier.Run()
+
+	// Wait until the background goroutine is inside Put (blocked on
+	// release), then start Stop concurrently and confirm it has NOT
+	// returned yet -- proving it is genuinely waiting on the in-flight
+	// call rather than racing past it.
+	select {
+	case <-bs.putEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background ApplyAvailable never reached Put")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		applier.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned before the in-flight Put finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(bs.release)
+
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after the in-flight Put finished")
+	}
+
+	if leader.LastApplied() != 1 {
+		t.Fatalf("LastApplied = %d, want 1 (the in-flight apply should have completed)", leader.LastApplied())
 	}
 }
