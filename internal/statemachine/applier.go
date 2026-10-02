@@ -86,6 +86,10 @@ func (a *Applier) ApplyAvailable() (applied int, err error) {
 	a.applyMu.Lock()
 	defer a.applyMu.Unlock()
 
+	if err := a.restorePendingSnapshotLocked(); err != nil {
+		return 0, err
+	}
+
 	from := a.node.LastApplied() + 1
 	entries := a.node.CommittedEntries(from)
 
@@ -106,6 +110,77 @@ func (a *Applier) ApplyAvailable() (applied int, err error) {
 	}
 
 	return applied, nil
+}
+
+// restorePendingSnapshotLocked checks whether a.node has a snapshot its
+// state machine has not yet caught up to (see (*raft.Node).PendingSnapshot)
+// and, if so, restores it before letting the caller (ApplyAvailable)
+// proceed to apply any further committed entries. It must be called with
+// a.applyMu held, so it can never race a concurrent ApplyAvailable/
+// CreateSnapshot call.
+//
+// This is the mechanism that makes Phase 9 log compaction safe: once a
+// snapshot has discarded a prefix of the Raft log, the entries covering
+// everything up through its LastIncludedIndex no longer exist to replay
+// at all -- restoring sm's entire state from the snapshot's own bytes is
+// the only way to recover it (see docs/raft/phase9-snapshots.md). a.sm
+// must implement Snapshotter for this to succeed; if it does not, this
+// returns a clear error rather than silently skipping the restore and
+// later applying entries against a state machine missing everything the
+// snapshot represented.
+func (a *Applier) restorePendingSnapshotLocked() error {
+	snap, ok := a.node.PendingSnapshot()
+	if !ok {
+		return nil
+	}
+
+	restorer, supportsSnapshots := a.sm.(Snapshotter)
+	if !supportsSnapshots {
+		return fmt.Errorf("statemachine: a snapshot through index %d is pending but this state machine does not implement Snapshotter", snap.LastIncludedIndex)
+	}
+	if err := restorer.RestoreSnapshot(snap.Data); err != nil {
+		return fmt.Errorf("statemachine: restore snapshot through index %d: %w", snap.LastIncludedIndex, err)
+	}
+	if err := a.node.ConfirmSnapshotRestored(snap.LastIncludedIndex); err != nil {
+		return fmt.Errorf("statemachine: confirm snapshot restored through index %d: %w", snap.LastIncludedIndex, err)
+	}
+	return nil
+}
+
+// CreateSnapshot captures the state machine's current state as a new Raft
+// snapshot through index, which must exactly equal a.node.LastApplied() at
+// the moment it is captured -- see (*raft.Node).CreateSnapshot for the
+// full validation CreateSnapshot delegates to. CreateSnapshot holds the
+// same lock ApplyAvailable does for its entire duration, so a concurrent
+// ApplyAvailable call (e.g. from Run's background goroutine) can never
+// advance LastApplied -- and thereby the actual state sm.CreateSnapshot is
+// about to capture -- out from under the index this call is about to
+// claim the snapshot represents. See docs/raft/phase9-snapshots.md.
+//
+// It returns an error, persisting nothing, if a.sm does not implement
+// Snapshotter, if index does not exactly equal the current LastApplied, or
+// if the underlying (*raft.Node).CreateSnapshot call itself fails (an
+// invalid index, or a persistence failure).
+func (a *Applier) CreateSnapshot(index uint64) error {
+	a.applyMu.Lock()
+	defer a.applyMu.Unlock()
+
+	creator, ok := a.sm.(Snapshotter)
+	if !ok {
+		return fmt.Errorf("statemachine: CreateSnapshot: state machine does not implement Snapshotter")
+	}
+	if got := a.node.LastApplied(); index != got {
+		return fmt.Errorf("statemachine: CreateSnapshot(%d): must exactly equal the current LastApplied (%d) -- a snapshot can only capture the state machine's exact current state", index, got)
+	}
+
+	data, err := creator.CreateSnapshot()
+	if err != nil {
+		return fmt.Errorf("statemachine: create snapshot: %w", err)
+	}
+	if err := a.node.CreateSnapshot(index, data); err != nil {
+		return fmt.Errorf("statemachine: persist snapshot: %w", err)
+	}
+	return nil
 }
 
 // Run starts a background goroutine that calls ApplyAvailable once

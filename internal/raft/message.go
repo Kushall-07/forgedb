@@ -60,3 +60,28 @@ type AppendEntriesReply struct {
 	Term    uint64
 	Success bool
 }
+
+// InstallSnapshotArgs is the InstallSnapshot RPC request (Phase 9): sent
+// by a leader to a follower whose nextIndex has fallen at or behind the
+// leader's own compacted log boundary, so ordinary AppendEntries can no
+// longer bring it up to date (the leader no longer has the entries that
+// would require -- see docs/raft/phase9-snapshots.md). Data is the
+// state machine's entire opaque serialized state through
+// LastIncludedIndex; Phase 9 sends it as a single RPC rather than
+// chunking it (see the phase doc's known limitations).
+type InstallSnapshotArgs struct {
+	Term              uint64
+	LeaderID          string
+	LastIncludedIndex uint64
+	LastIncludedTerm  uint64
+	Data              []byte
+}
+
+// InstallSnapshotReply is the InstallSnapshot RPC response. Success is
+// false whenever the term check fails or the snapshot could not be
+// durably persisted; Term lets the leader discover it is stale even when
+// the RPC is rejected.
+type InstallSnapshotReply struct {
+	Term    uint64
+	Success bool
+}

@@ -68,7 +68,16 @@ func (s *skipList) search(key []byte) (*skipListNode, bool) {
 // upsert inserts a new node for key, or updates the existing node's value
 // and tombstone state in place if key is already present. key and value
 // are stored as given, so callers must pass copies they own.
-func (s *skipList) upsert(key, value []byte, deleted bool) {
+//
+// It reports existed (whether key was already present, tombstone or
+// not), wasDeleted (the prior node's tombstone state, meaningless if
+// existed is false), and oldValueLen (the prior node's value length,
+// meaningless if existed is false) -- exactly what a caller (MemTable)
+// needs to maintain an incremental live-entry/byte count without ever
+// having to re-scan the whole list (see MemTable.Len/Bytes and
+// docs/observability/phase12-observability.md's rule against scanning
+// the database on every metrics scrape).
+func (s *skipList) upsert(key, value []byte, deleted bool) (existed, wasDeleted bool, oldValueLen int) {
 	update := make([]*skipListNode, maxLevel)
 	x := s.header
 	for i := s.level - 1; i >= 0; i-- {
@@ -79,9 +88,10 @@ func (s *skipList) upsert(key, value []byte, deleted bool) {
 	}
 	x = x.forward[0]
 	if x != nil && bytes.Equal(x.key, key) {
+		existed, wasDeleted, oldValueLen = true, x.deleted, len(x.value)
 		x.value = value
 		x.deleted = deleted
-		return
+		return existed, wasDeleted, oldValueLen
 	}
 
 	newLevel := randomLevel()
@@ -96,5 +106,17 @@ func (s *skipList) upsert(key, value []byte, deleted bool) {
 	for i := 0; i < newLevel; i++ {
 		node.forward[i] = update[i].forward[i]
 		update[i].forward[i] = node
+	}
+	return false, false, 0
+}
+
+// forEach calls fn once for every node in the list, in ascending key
+// order, by walking the level-0 forward chain (which always threads
+// through every node regardless of its own height). It includes
+// tombstones; callers that only want live entries (see MemTable.All)
+// filter them out themselves.
+func (s *skipList) forEach(fn func(node *skipListNode)) {
+	for x := s.header.forward[0]; x != nil; x = x.forward[0] {
+		fn(x)
 	}
 }

@@ -31,16 +31,25 @@ import (
 // mutex here is a second, independent guarantee that holds even if a
 // FilePersister were ever shared or driven directly by a test.
 type FilePersister struct {
-	mu   sync.Mutex
-	path string
+	mu           sync.Mutex
+	path         string
+	snapshotPath string
 }
 
+// snapshotFileSuffix names the snapshot file FilePersister derives from
+// its state file's own path (path + snapshotFileSuffix), so that
+// NewFilePersister's existing single-argument signature (and therefore
+// every pre-Phase-9 call site) never needed to change.
+const snapshotFileSuffix = ".snapshot"
+
 // NewFilePersister returns a FilePersister that reads and writes state at
-// path. It performs no I/O itself; the file (and its directory) are
-// created on the first SaveState call, following atomicfile.Write's
-// normal directory-creation behavior.
+// path, and reads and writes its snapshot (see Snapshot) at a second file
+// derived from path (path+".snapshot"). It performs no I/O itself; both
+// files (and their directory) are created on the first SaveState/
+// SaveSnapshot call, following atomicfile.Write's normal
+// directory-creation behavior.
 func NewFilePersister(path string) *FilePersister {
-	return &FilePersister{path: path}
+	return &FilePersister{path: path, snapshotPath: path + snapshotFileSuffix}
 }
 
 // SaveState implements Persister.
@@ -73,4 +82,39 @@ func (p *FilePersister) LoadState() (PersistentState, error) {
 		return PersistentState{}, fmt.Errorf("raft: read persisted state %s: %w", p.path, err)
 	}
 	return decodeState(data)
+}
+
+// SaveSnapshot implements Persister. It writes snap via the same
+// write-temp/fsync/atomic-rename protocol SaveState uses, to a file
+// distinct from the state file (see snapshotFileSuffix) -- a crash can
+// therefore never corrupt one by interrupting a write to the other.
+func (p *FilePersister) SaveSnapshot(snap Snapshot) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	data, err := encodeSnapshot(snap)
+	if err != nil {
+		return fmt.Errorf("raft: encode persisted snapshot: %w", err)
+	}
+	if err := atomicfile.Write(p.snapshotPath, data); err != nil {
+		return fmt.Errorf("raft: write persisted snapshot: %w", err)
+	}
+	return nil
+}
+
+// LoadSnapshot implements Persister. It returns ErrNoSnapshot if the
+// snapshot file does not exist (a node that has never compacted its log),
+// or a wrapped ErrCorrupt if it exists but fails to decode.
+func (p *FilePersister) LoadSnapshot() (Snapshot, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	data, err := os.ReadFile(p.snapshotPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return Snapshot{}, ErrNoSnapshot
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("raft: read persisted snapshot %s: %w", p.snapshotPath, err)
+	}
+	return decodeSnapshot(data)
 }

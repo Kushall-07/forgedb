@@ -22,6 +22,12 @@ var ErrKeyNotFound = errors.New("storage: key not found")
 // as ordinary stored values, distinct from a missing or deleted key.
 var ErrEmptyKey = errors.New("storage: key must not be empty")
 
+// Entry is a single live key/value pair, as returned by Store.Snapshot.
+type Entry struct {
+	Key   []byte
+	Value []byte
+}
+
 // Store is the storage engine's public contract. Implementations must
 // distinguish a missing key from a stored value (via ErrKeyNotFound) and
 // must not let callers mutate stored state through slices passed to Put
@@ -40,4 +46,13 @@ type Store interface {
 
 	// Close releases any resources held by the store.
 	Close() error
+
+	// Snapshot returns every currently live key/value pair (deleted keys
+	// are omitted), sorted by key for deterministic encoding. It exists
+	// solely so a layer above Store (see internal/statemachine's state
+	// machine snapshotting, Phase 9) can capture and later restore this
+	// store's entire logical content without Store exposing its WAL or
+	// MemTable internals; it has no interaction with the WAL itself and
+	// does not imply or require any SSTable/compaction support.
+	Snapshot() ([]Entry, error)
 }

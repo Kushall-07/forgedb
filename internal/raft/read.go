@@ -1,6 +1,10 @@
 package raft
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/Kushall-07/forgedb/internal/metrics"
+)
 
 // ErrReadBarrierUnavailable is returned by ReadIndex when this node cannot
 // currently confirm, via a fresh round of AppendEntries to a majority of
@@ -61,9 +65,12 @@ var ErrReadBarrierUnavailable = errors.New("raft: read barrier unavailable: coul
 // lock -> capture -> unlock -> RPC -> reacquire -> validate pattern the
 // rest of internal/raft already uses.
 func (n *Node) ReadIndex() (uint64, error) {
+	metrics.RaftReadIndexTotal.Inc()
+
 	n.mu.Lock()
 	if n.role != Leader {
 		n.mu.Unlock()
+		metrics.RaftReadIndexFailureTotal.Inc()
 		return 0, ErrNotLeader
 	}
 
@@ -75,10 +82,23 @@ func (n *Node) ReadIndex() (uint64, error) {
 		peer string
 		args AppendEntriesArgs
 	}
+	snapshotBoundary := n.log.entries[0].Index
 	calls := make([]pendingCall, 0, len(n.peers))
 	for _, peer := range n.peers {
+		// A peer whose nextIndex has fallen at or behind the compacted log
+		// boundary cannot be sent a well-formed AppendEntries at all (see
+		// broadcastAppendEntriesLocked); rather than send it an
+		// InstallSnapshot purely to confirm a read, which ReadIndex has no
+		// need to wait on, this peer is simply treated as not
+		// acknowledging this round -- exactly as if it were unreachable,
+		// which is conservative (it can only make quorum confirmation
+		// harder, never easier) and therefore still safe. See
+		// docs/raft/phase9-snapshots.md.
+		if n.nextIndex[peer] <= snapshotBoundary {
+			continue
+		}
 		prevIndex := n.nextIndex[peer] - 1
-		prevTerm, _ := n.log.TermAt(prevIndex) // always ok: prevIndex never exceeds this leader's own log
+		prevTerm, _ := n.log.TermAt(prevIndex) // always ok: prevIndex is at or above snapshotBoundary, and never exceeds this leader's own log
 		calls = append(calls, pendingCall{
 			peer: peer,
 			args: AppendEntriesArgs{
@@ -98,6 +118,7 @@ func (n *Node) ReadIndex() (uint64, error) {
 	// majority() already computes (majority() == 1 when len(n.peers) ==
 	// 0). There is no RPC round to send or wait for.
 	if majority <= 1 {
+		metrics.RaftReadIndexSuccessTotal.Inc()
 		return index, nil
 	}
 
@@ -120,7 +141,9 @@ func (n *Node) ReadIndex() (uint64, error) {
 	n.mu.Unlock()
 
 	if !stillCurrent || acked < majority {
+		metrics.RaftReadIndexFailureTotal.Inc()
 		return 0, ErrReadBarrierUnavailable
 	}
+	metrics.RaftReadIndexSuccessTotal.Inc()
 	return index, nil
 }

@@ -159,6 +159,7 @@ func decodeState(data []byte) (PersistentState, error) {
 
 	entries := make([]LogEntry, 0, numEntries)
 	var prevTerm uint64
+	var firstIndex uint64
 	for i := uint32(0); i < numEntries; i++ {
 		if len(body)-off < 8+8+4 {
 			return PersistentState{}, fmt.Errorf("raft: truncated log entry %d: %w", i, ErrCorrupt)
@@ -176,13 +177,22 @@ func decodeState(data []byte) (PersistentState, error) {
 			return PersistentState{}, fmt.Errorf("raft: truncated log entry %d command: %w", i, ErrCorrupt)
 		}
 
-		// The log is 1-indexed and stored in order (see Log): a
-		// well-formed persisted log's i-th entry must be at index i+1,
-		// and a well-formed Raft log's term never decreases from one
-		// entry to the next. Either violation means the file was not
-		// produced by encodeState (or was corrupted after it was).
-		wantIndex := uint64(i) + 1
-		if index != wantIndex {
+		// The log is stored in strictly sequential index order (see Log),
+		// but the *first* entry's index is no longer always 1 once Phase
+		// 9 log compaction has discarded a prefix -- it must be whatever
+		// index immediately follows the current snapshot boundary (see
+		// docs/raft/phase9-snapshots.md). Every entry after the first
+		// must still follow it by exactly 1, index must never be 0 (that
+		// is the sentinel's reserved position, never a real persisted
+		// entry), and a well-formed Raft log's term must never decrease
+		// from one entry to the next. Any violation means the file was
+		// not produced by encodeState (or was corrupted after it was).
+		if i == 0 {
+			if index == 0 {
+				return PersistentState{}, fmt.Errorf("raft: log entry 0 has index 0, which is reserved for the sentinel: %w", ErrCorrupt)
+			}
+			firstIndex = index
+		} else if wantIndex := firstIndex + uint64(i); index != wantIndex {
 			return PersistentState{}, fmt.Errorf("raft: log entry %d has index %d, want %d: %w", i, index, wantIndex, ErrCorrupt)
 		}
 		if term < prevTerm {
@@ -206,4 +216,123 @@ func decodeState(data []byte) (PersistentState, error) {
 	}
 
 	return PersistentState{CurrentTerm: currentTerm, VotedFor: votedFor, Log: entries}, nil
+}
+
+// This section defines Phase 9's on-disk representation of Snapshot, used
+// by FilePersister.SaveSnapshot/LoadSnapshot. It follows exactly the same
+// conventions as PersistentState above (magic + version + explicit
+// little-endian fields + a trailing CRC-32C checksum over everything
+// before it) and for the same reasons: a full snapshot of current state,
+// not an edit log, so recovery only ever has one file to read. See
+// docs/raft/phase9-snapshots.md.
+//
+//	magic (8 bytes "ForgeSS1")
+//	formatVersion (u32 LE)
+//	lastIncludedIndex (u64 LE)
+//	lastIncludedTerm  (u64 LE)
+//	dataLen (u32 LE) | data bytes
+//	checksum (u32 LE, CRC-32C over every preceding byte)
+var snapshotMagic = [8]byte{'F', 'o', 'r', 'g', 'e', 'S', 'S', '1'}
+
+const snapshotFormatVersion1 = 1
+
+// maxSnapshotDataSize bounds the opaque state-machine payload a snapshot
+// may carry, checked before it is ever used to size an allocation (see
+// decodeSnapshot). 256 MiB is generous for the KV state Phase 9's
+// in-memory MemTable-backed storage engine can hold in any realistic test
+// or demo scenario, without being unbounded.
+const (
+	maxSnapshotDataSize = 1 << 28 // 256 MiB
+	maxSnapshotFileSize = 1 << 29 // 512 MiB total file size, checked before decoding
+)
+
+// snapshotHeaderSize is the fixed size, in bytes, of encodeSnapshot's
+// output before Data's variable-length bytes: magic + version +
+// lastIncludedIndex + lastIncludedTerm + dataLen.
+const snapshotHeaderSize = 8 + 4 + 8 + 8 + 4
+
+// encodeSnapshot serializes snap into its complete on-disk representation,
+// ready to be written atomically via atomicfile.Write. It validates Data's
+// length against maxSnapshotDataSize before allocating the output buffer.
+func encodeSnapshot(snap Snapshot) ([]byte, error) {
+	if len(snap.Data) > maxSnapshotDataSize {
+		return nil, fmt.Errorf("raft: snapshot data of %d bytes exceeds maximum of %d", len(snap.Data), maxSnapshotDataSize)
+	}
+
+	size := snapshotHeaderSize + len(snap.Data) + 4 // + checksum
+	buf := make([]byte, size)
+	off := 0
+	copy(buf[off:off+8], snapshotMagic[:])
+	off += 8
+	binary.LittleEndian.PutUint32(buf[off:], snapshotFormatVersion1)
+	off += 4
+	binary.LittleEndian.PutUint64(buf[off:], snap.LastIncludedIndex)
+	off += 8
+	binary.LittleEndian.PutUint64(buf[off:], snap.LastIncludedTerm)
+	off += 8
+	binary.LittleEndian.PutUint32(buf[off:], uint32(len(snap.Data)))
+	off += 4
+	copy(buf[off:], snap.Data)
+	off += len(snap.Data)
+
+	checksum := crc32.Checksum(buf[:off], crcTable)
+	binary.LittleEndian.PutUint32(buf[off:], checksum)
+	off += 4
+
+	return buf[:off], nil
+}
+
+// decodeSnapshot parses and fully validates data, previously produced by
+// encodeSnapshot, returning ErrCorrupt (wrapped with detail) for any
+// structural problem: a bad magic number, an unsupported version, a
+// truncated header or payload, a length exceeding maxSnapshotDataSize, or
+// a checksum mismatch. The data length is validated before it is ever
+// used to size an allocation or slice a buffer, so a corrupted or
+// maliciously crafted length can never trigger an unbounded allocation or
+// out-of-range read.
+func decodeSnapshot(data []byte) (Snapshot, error) {
+	if len(data) > maxSnapshotFileSize {
+		return Snapshot{}, fmt.Errorf("raft: persisted snapshot of %d bytes exceeds maximum of %d: %w", len(data), maxSnapshotFileSize, ErrCorrupt)
+	}
+	if len(data) < snapshotHeaderSize+4 { // +4 for the trailing checksum
+		return Snapshot{}, fmt.Errorf("raft: truncated snapshot (%d bytes): %w", len(data), ErrCorrupt)
+	}
+	if !bytes.Equal(data[0:8], snapshotMagic[:]) {
+		return Snapshot{}, fmt.Errorf("raft: snapshot: bad magic: %w", ErrCorrupt)
+	}
+	version := binary.LittleEndian.Uint32(data[8:12])
+	if version != snapshotFormatVersion1 {
+		return Snapshot{}, fmt.Errorf("raft: snapshot: unsupported format version %d: %w", version, ErrCorrupt)
+	}
+
+	checksum := binary.LittleEndian.Uint32(data[len(data)-4:])
+	body := data[:len(data)-4]
+	if crc32.Checksum(body, crcTable) != checksum {
+		return Snapshot{}, fmt.Errorf("raft: snapshot: checksum mismatch: %w", ErrCorrupt)
+	}
+
+	off := 12
+	lastIncludedIndex := binary.LittleEndian.Uint64(body[off : off+8])
+	off += 8
+	lastIncludedTerm := binary.LittleEndian.Uint64(body[off : off+8])
+	off += 8
+
+	if len(body)-off < 4 {
+		return Snapshot{}, fmt.Errorf("raft: snapshot: truncated data length: %w", ErrCorrupt)
+	}
+	dataLen := binary.LittleEndian.Uint32(body[off : off+4])
+	off += 4
+	if dataLen > maxSnapshotDataSize {
+		return Snapshot{}, fmt.Errorf("raft: snapshot: data length %d exceeds maximum of %d: %w", dataLen, maxSnapshotDataSize, ErrCorrupt)
+	}
+	if uint64(len(body)-off) != uint64(dataLen) {
+		return Snapshot{}, fmt.Errorf("raft: snapshot: truncated or trailing bytes after data (declared %d, have %d): %w", dataLen, len(body)-off, ErrCorrupt)
+	}
+
+	var payload []byte
+	if dataLen > 0 {
+		payload = append([]byte(nil), body[off:off+int(dataLen)]...)
+	}
+
+	return Snapshot{LastIncludedIndex: lastIncludedIndex, LastIncludedTerm: lastIncludedTerm, Data: payload}, nil
 }

@@ -37,6 +37,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Kushall-07/forgedb/internal/logging"
+	"github.com/Kushall-07/forgedb/internal/metrics"
 	"github.com/Kushall-07/forgedb/internal/raft"
 	"github.com/Kushall-07/forgedb/internal/statemachine"
 	"github.com/Kushall-07/forgedb/internal/storage"
@@ -123,6 +125,19 @@ type Config struct {
 	// giving this package a second, parallel storage implementation of its
 	// own.
 	WrapStore func(storage.Store) storage.Store
+
+	// WrapPersister, if non-nil, wraps the raft.FilePersister Open
+	// constructs from RaftDir before it is handed to raft.NewNode. It is
+	// WrapStore's exact analogue for Raft persistence instead of KV
+	// storage: production code has no reason to set this; it exists
+	// solely as a test seam (see Phase 10's chaos package) for injecting
+	// persistence faults -- a failed SaveState or SaveSnapshot -- without
+	// this package needing a second, parallel Persister implementation of
+	// its own. The wrapped value still ultimately delegates to the real
+	// FilePersister rooted at RaftDir, so a restart against the same
+	// RaftDir recovers exactly what was actually durably saved, fault
+	// injection included.
+	WrapPersister func(raft.Persister) raft.Persister
 }
 
 // Node is one ForgeDB node: a raft.Node, a storage.Store, a
@@ -172,7 +187,10 @@ func Open(cfg Config) (*Node, error) {
 		backingStore = cfg.WrapStore(store)
 	}
 
-	persister := raft.NewFilePersister(filepath.Join(cfg.RaftDir, raftStateFileName))
+	var persister raft.Persister = raft.NewFilePersister(filepath.Join(cfg.RaftDir, raftStateFileName))
+	if cfg.WrapPersister != nil {
+		persister = cfg.WrapPersister(persister)
+	}
 	raftNode, err := raft.NewNode(raft.Options{
 		ID:              cfg.ID,
 		Peers:           cfg.Peers,
@@ -195,7 +213,22 @@ func Open(cfg Config) (*Node, error) {
 	sm := statemachine.NewKVStateMachine(backingStore)
 	applier := statemachine.NewApplier(raftNode, sm)
 
-	return &Node{id: cfg.ID, raft: raftNode, store: store, sm: sm, applier: applier}, nil
+	n := &Node{id: cfg.ID, raft: raftNode, store: store, sm: sm, applier: applier}
+
+	registerMetricsOnce()
+	currentNode.Store(n)
+	metrics.NodeInfo.WithLabelValues(cfg.ID).Set(1)
+
+	status := raftNode.Status()
+	recovered := status.Term > 0 || status.LastLogIndex > 0 || status.SnapshotIndex > 0
+	logging.With("node_id", cfg.ID, "component", "dbnode").Info(logging.EventNodeStarted,
+		"raft_dir", cfg.RaftDir, "kv_dir", cfg.KVDir, "term", status.Term, "last_log_index", status.LastLogIndex, "snapshot_index", status.SnapshotIndex)
+	if recovered {
+		logging.With("node_id", cfg.ID, "component", "dbnode").Info(logging.EventNodeRecovered,
+			"term", status.Term, "last_log_index", status.LastLogIndex, "snapshot_index", status.SnapshotIndex)
+	}
+
+	return n, nil
 }
 
 // ID returns the node's own ID.
@@ -246,6 +279,22 @@ func (n *Node) Drain() { n.raft.Drain() }
 // Run's background goroutine and a polling loop.
 func (n *Node) ApplyAvailable() (applied int, err error) { return n.applier.ApplyAvailable() }
 
+// CreateSnapshot captures this node's state machine (KV data and
+// deduplication state) as a new Raft snapshot through index, and compacts
+// the Raft log accordingly -- see (*raft.Node).CreateSnapshot and
+// (*statemachine.Applier).CreateSnapshot, which this delegates to
+// directly. index must exactly equal this node's own Raft().LastApplied()
+// at the moment of the call: it is the caller's responsibility (e.g. after
+// driving ApplyAvailable to completion in a test, or via a production
+// policy a future phase might add) to choose a moment where that holds.
+// See docs/raft/phase9-snapshots.md for the full design and the chosen
+// snapshot-boundary semantics.
+func (n *Node) CreateSnapshot(index uint64) error { return n.applier.CreateSnapshot(index) }
+
+// SnapshotIndex returns the index of this node's most recent snapshot (the
+// Raft log's current compaction boundary), or 0 if none exists yet.
+func (n *Node) SnapshotIndex() uint64 { return n.raft.SnapshotIndex() }
+
 // ConsistentGet performs a linearizable read of key. See
 // docs/raft/phase8.5-read-consistency.md for the full design; in outline,
 // it follows three steps, in order:
@@ -258,7 +307,7 @@ func (n *Node) ApplyAvailable() (applied int, err error) { return n.applier.Appl
 //     confirmed -- e.g. a minority partition, or a leadership change
 //     during the confirmation round) without reading anything.
 //  2. Wait for this node's own Applier to apply every entry through that
-//     barrier (waitForApplied): committed is not the same as applied
+//     barrier (WaitApplied): committed is not the same as applied
 //     (see internal/raft's commitIndex/lastApplied distinction), and
 //     storage must never be read ahead of the state machine's own
 //     progress through the log.
@@ -278,24 +327,38 @@ func (n *Node) ApplyAvailable() (applied int, err error) { return n.applier.Appl
 // ConsistentGet never serves a read from a follower's local storage; it
 // is leader-only by construction, via step 1.
 func (n *Node) ConsistentGet(ctx context.Context, key []byte) ([]byte, error) {
+	metrics.ConsistentGetTotal.Inc()
+	start := time.Now()
+	defer func() { metrics.ConsistentGetLatency.Observe(time.Since(start).Seconds()) }()
+
 	readIndex, err := n.raft.ReadIndex()
 	if err != nil {
+		metrics.ConsistentGetFailureTotal.Inc()
 		return nil, err
 	}
-	if err := n.waitForApplied(ctx, readIndex); err != nil {
+	if err := n.WaitApplied(ctx, readIndex); err != nil {
+		metrics.ConsistentGetFailureTotal.Inc()
 		return nil, fmt.Errorf("dbnode: wait for state machine to apply through read index %d: %w", readIndex, err)
 	}
+	metrics.ConsistentGetSuccessTotal.Inc()
 	return n.store.Get(key)
 }
 
-// waitForApplied blocks until n.raft.LastApplied() >= target, or until ctx
-// is done. It is event-driven rather than a busy-loop: it waits on
+// WaitApplied blocks until this node's state machine has applied every
+// entry through target (n.raft.LastApplied() >= target), or until ctx is
+// done. It is event-driven rather than a busy-loop: it waits on
 // n.raft.AppliedCh() (notified by every (*raft.Node).MarkApplied call) and
 // re-checks LastApplied each time it wakes, exactly the same
 // wait-then-recheck pattern CommitCh already establishes for commit
 // notifications -- a coalesced or missed notification is never a problem
 // because LastApplied, not the channel, is the authoritative check.
-func (n *Node) waitForApplied(ctx context.Context, target uint64) error {
+//
+// ConsistentGet uses this to wait for its read barrier; a client-facing
+// write API (internal/api's /kv endpoints) uses it the same way after
+// Propose, to answer a write request only once the command it proposed
+// has actually been applied, not merely committed -- see Propose's doc
+// comment on the distinction.
+func (n *Node) WaitApplied(ctx context.Context, target uint64) error {
 	for {
 		if n.raft.LastApplied() >= target {
 			return nil
@@ -336,5 +399,19 @@ func (n *Node) Close() error {
 	n.raft.Stop()
 	n.raft.Drain()
 	n.applier.Stop()
-	return n.store.Close()
+	err := n.store.Close()
+
+	// Only clear the metrics/cluster-diagnostics pointer if this is still
+	// the node it currently points at -- a later Open may already have
+	// made a different Node current (see registerMetricsOnce's doc
+	// comment), and Close must not blind that one's gauges.
+	currentNode.CompareAndSwap(n, nil)
+
+	logEvent := logging.With("node_id", n.id, "component", "dbnode")
+	if err != nil {
+		logEvent.Warn(logging.EventNodeStopped, "error", err.Error())
+	} else {
+		logEvent.Info(logging.EventNodeStopped)
+	}
+	return err
 }

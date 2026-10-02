@@ -28,6 +28,14 @@ var ErrEmptyKey = errors.New("memtable: key must not be empty")
 type MemTable struct {
 	mu   sync.RWMutex
 	list *skipList
+
+	// liveCount and liveBytes are maintained incrementally by Put/Delete
+	// (via skipList.upsert's existed/wasDeleted/oldValueLen return values)
+	// so Len/Bytes never need to walk the list -- see Len's doc comment
+	// and docs/observability/phase12-observability.md's rule against
+	// scanning the whole database on every metrics scrape.
+	liveCount int
+	liveBytes int64
 }
 
 // New creates an empty MemTable.
@@ -50,7 +58,14 @@ func (m *MemTable) Put(key, value []byte) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.list.upsert(keyCopy, valueCopy, false)
+	existed, wasDeleted, oldValueLen := m.list.upsert(keyCopy, valueCopy, false)
+	switch {
+	case !existed, wasDeleted:
+		m.liveCount++
+		m.liveBytes += int64(len(keyCopy)) + int64(len(valueCopy))
+	default: // existed and was already live: value replaced in place
+		m.liveBytes += int64(len(valueCopy)) - int64(oldValueLen)
+	}
 	return nil
 }
 
@@ -83,6 +98,56 @@ func (m *MemTable) Delete(key []byte) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.list.upsert(keyCopy, nil, true)
+	existed, wasDeleted, oldValueLen := m.list.upsert(keyCopy, nil, true)
+	if existed && !wasDeleted {
+		m.liveCount--
+		m.liveBytes -= int64(len(keyCopy)) + int64(oldValueLen)
+	}
 	return nil
+}
+
+// Len returns the number of currently live (non-tombstone) entries. It
+// is O(1): liveCount is maintained incrementally by Put/Delete, not
+// computed by scanning the list, so it is cheap to call on every
+// metrics scrape (see docs/observability/phase12-observability.md).
+func (m *MemTable) Len() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.liveCount
+}
+
+// Bytes returns the approximate total size, in bytes, of every
+// currently live entry's key plus value. Like Len, it is O(1).
+func (m *MemTable) Bytes() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.liveBytes
+}
+
+// Entry is a single live key/value pair, as returned by All.
+type Entry struct {
+	Key   []byte
+	Value []byte
+}
+
+// All returns every currently live (non-tombstone) entry, in ascending
+// key order, each a fresh copy safe for the caller to retain. It exists
+// for Phase 9 state-machine snapshotting (see internal/storage.Store.Snapshot);
+// tombstones are deliberately omitted, since a deleted key's absence is
+// already fully captured by the key simply not appearing.
+func (m *MemTable) All() []Entry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []Entry
+	m.list.forEach(func(n *skipListNode) {
+		if n.deleted {
+			return
+		}
+		out = append(out, Entry{
+			Key:   append([]byte(nil), n.key...),
+			Value: append([]byte(nil), n.value...),
+		})
+	})
+	return out
 }

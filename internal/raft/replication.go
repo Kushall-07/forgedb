@@ -1,6 +1,10 @@
 package raft
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/Kushall-07/forgedb/internal/metrics"
+)
 
 // broadcastAppendEntriesLocked sends one round of AppendEntries to every
 // peer: a heartbeat (no entries) if the peer is already fully caught up,
@@ -12,11 +16,27 @@ import "fmt"
 func (n *Node) broadcastAppendEntriesLocked() {
 	term := n.currentTerm
 	leaderCommit := n.commitIndex
+	snapshotBoundary := n.log.entries[0].Index
 
 	for _, peer := range n.peers {
 		peer := peer
+
+		// A peer whose nextIndex has fallen at or behind this leader's own
+		// compacted log boundary can never be caught up by an ordinary
+		// AppendEntries: the entries it would need (anything at or before
+		// snapshotBoundary) no longer exist in this leader's log at all --
+		// see docs/raft/phase9-snapshots.md. InstallSnapshot is the only
+		// correct way to bring it forward.
+		if n.nextIndex[peer] <= snapshotBoundary {
+			snap := Snapshot{LastIncludedIndex: snapshotBoundary, LastIncludedTerm: n.log.entries[0].Term, Data: n.snapshotData}
+			n.trackRPC(func() {
+				n.sendInstallSnapshot(peer, term, snap)
+			})
+			continue
+		}
+
 		prevIndex := n.nextIndex[peer] - 1
-		prevTerm, _ := n.log.TermAt(prevIndex) // always ok: prevIndex never exceeds the leader's own log
+		prevTerm, _ := n.log.TermAt(prevIndex) // always ok: prevIndex is at or above snapshotBoundary, and never exceeds the leader's own log
 		entries := n.log.Slice(prevIndex + 1)
 
 		args := AppendEntriesArgs{
@@ -30,6 +50,53 @@ func (n *Node) broadcastAppendEntriesLocked() {
 		n.trackRPC(func() {
 			n.sendAppendEntries(peer, term, args)
 		})
+	}
+}
+
+// sendInstallSnapshot sends a single InstallSnapshot RPC to peer and
+// processes the reply: on success, it advances that peer's matchIndex to
+// at least snap.LastIncludedIndex and its nextIndex to exactly
+// snap.LastIncludedIndex+1 (per Raft's InstallSnapshot handling -- see
+// docs/raft/phase9-snapshots.md), then re-checks whether a new commit
+// index can be established, exactly as a successful AppendEntries reply
+// does. It runs outside n.mu (see trackRPC).
+//
+// Unlike sendAppendEntries, a rejected (Success=false, same-or-lower term)
+// reply needs no back-off: nextIndex is simply left unchanged, and the
+// next heartbeat round will naturally retry (most commonly because the
+// peer's own persistence failed transiently -- see HandleInstallSnapshot).
+func (n *Node) sendInstallSnapshot(peer string, term uint64, snap Snapshot) {
+	args := InstallSnapshotArgs{
+		Term:              term,
+		LeaderID:          n.id,
+		LastIncludedIndex: snap.LastIncludedIndex,
+		LastIncludedTerm:  snap.LastIncludedTerm,
+		Data:              snap.Data,
+	}
+	reply, err := n.transport.SendInstallSnapshot(peer, args)
+	if err != nil {
+		return // dropped/unreachable; a later heartbeat retries
+	}
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if reply.Term > n.currentTerm {
+		_ = n.becomeFollowerLocked(reply.Term)
+		return
+	}
+	if n.role != Leader || n.currentTerm != term {
+		return
+	}
+
+	if reply.Success {
+		if snap.LastIncludedIndex > n.matchIndex[peer] {
+			n.matchIndex[peer] = snap.LastIncludedIndex
+		}
+		if snap.LastIncludedIndex+1 > n.nextIndex[peer] {
+			n.nextIndex[peer] = snap.LastIncludedIndex + 1
+		}
+		n.maybeAdvanceCommitIndexLocked()
 	}
 }
 
@@ -55,8 +122,10 @@ func (n *Node) broadcastAppendEntriesLocked() {
 // Ordinary heartbeat/replication callers (broadcastAppendEntriesLocked)
 // simply ignore the return value, exactly as before this method had one.
 func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArgs) bool {
+	metrics.RaftAppendEntriesSentTotal.Inc()
 	reply, err := n.transport.SendAppendEntries(peer, args)
 	if err != nil {
+		metrics.RaftAppendEntriesFailedTotal.Inc()
 		return false // dropped/unreachable; a later heartbeat or retry will try again
 	}
 
@@ -67,17 +136,21 @@ func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArg
 		// Best-effort, as in sendRequestVote: becomeFollowerLocked
 		// already leaves state untouched on a persistence failure.
 		_ = n.becomeFollowerLocked(reply.Term)
+		metrics.RaftAppendEntriesFailedTotal.Inc()
 		return false
 	}
 	// This reply may be stale: we may no longer be leader, or a newer
 	// term may have started since this RPC was sent.
 	if n.role != Leader || n.currentTerm != term {
+		metrics.RaftAppendEntriesFailedTotal.Inc()
 		return false
 	}
 
 	if reply.Success {
+		metrics.RaftAppendEntriesSuccessTotal.Inc()
 		newMatch := args.PrevLogIndex + uint64(len(args.Entries))
 		if newMatch > n.matchIndex[peer] {
+			metrics.RaftEntriesReplicatedTotal.Add(newMatch - n.matchIndex[peer])
 			n.matchIndex[peer] = newMatch
 		}
 		if newMatch+1 > n.nextIndex[peer] {
@@ -87,6 +160,8 @@ func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArg
 		return true
 	}
 
+	metrics.RaftAppendEntriesFailedTotal.Inc()
+	logEvent(n.id).Info(eventAppendFailure, "peer_id", peer, "term", term)
 	if n.nextIndex[peer] > 1 {
 		n.nextIndex[peer]--
 	}
@@ -117,6 +192,8 @@ func (n *Node) maybeAdvanceCommitIndexLocked() {
 			}
 		}
 		if count >= n.majority() {
+			metrics.RaftEntriesCommittedTotal.Add(N - n.commitIndex)
+			logEvent(n.id).Debug(eventCommitAdvance, "commit_index", N)
 			n.commitIndex = N
 			n.notifyCommitLocked()
 			return
@@ -173,6 +250,10 @@ func (n *Node) HandleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	}
 
 	n.role = Follower
+	if args.LeaderID != "" && args.LeaderID != n.leaderID {
+		metrics.RaftLeaderChangesTotal.Inc()
+		logEvent(n.id).Info(eventLeaderChanged, "term", n.currentTerm, "leader_id", args.LeaderID)
+	}
 	n.leaderID = args.LeaderID
 	n.resetElectionTimerLocked()
 
@@ -184,6 +265,7 @@ func (n *Node) HandleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	if n.log.AppendAfter(args.PrevLogIndex, args.Entries) {
 		if err := n.persistLocked(); err != nil {
 			n.log.entries = oldEntries
+			metrics.RecordError("raft")
 			return AppendEntriesReply{Term: n.currentTerm, Success: false}
 		}
 	}
@@ -195,6 +277,7 @@ func (n *Node) HandleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 			newCommit = lastNew
 		}
 		if newCommit > n.commitIndex {
+			metrics.RaftEntriesCommittedTotal.Add(newCommit - n.commitIndex)
 			n.commitIndex = newCommit
 			n.notifyCommitLocked()
 		}
@@ -238,6 +321,7 @@ func (n *Node) Propose(command Command) (index uint64, term uint64, err error) {
 
 	if perr := n.persistLocked(); perr != nil {
 		n.log.entries = n.log.entries[:oldLen]
+		metrics.RecordError("raft")
 		return 0, 0, fmt.Errorf("raft: persist proposed entry: %w", perr)
 	}
 

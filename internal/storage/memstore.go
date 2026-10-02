@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/Kushall-07/forgedb/internal/logging"
+	"github.com/Kushall-07/forgedb/internal/metrics"
 	"github.com/Kushall-07/forgedb/internal/storage/memtable"
 	"github.com/Kushall-07/forgedb/internal/storage/wal"
 )
@@ -58,24 +60,30 @@ var _ Store = (*MemStore)(nil)
 // boundary -- before applying it to the MemTable. If the WAL append or
 // sync fails, the MemTable is left unmutated and the error is returned.
 func (s *MemStore) Put(key, value []byte) error {
+	metrics.StoragePutTotal.Inc()
 	if len(key) == 0 {
 		return ErrEmptyKey
 	}
 	if err := s.log.Append(wal.Record{Type: wal.OpPut, Key: key, Value: value}); err != nil {
+		metrics.RecordError("storage")
 		return fmt.Errorf("storage: wal append: %w", err)
 	}
 	if err := s.log.Sync(); err != nil {
+		metrics.RecordError("storage")
 		return fmt.Errorf("storage: wal sync: %w", err)
 	}
+	logging.Default.Debug(logging.EventStoragePut, "component", "storage", "key_size", len(key), "value_size", len(value))
 	return s.mt.Put(key, value)
 }
 
 func (s *MemStore) Get(key []byte) ([]byte, error) {
+	metrics.StorageGetTotal.Inc()
 	if len(key) == 0 {
 		return nil, ErrEmptyKey
 	}
 	value, found := s.mt.Get(key)
 	if !found {
+		metrics.StorageKeyNotFoundTotal.Inc()
 		return nil, ErrKeyNotFound
 	}
 	return value, nil
@@ -85,19 +93,54 @@ func (s *MemStore) Get(key []byte) ([]byte, error) {
 // to the MemTable, following the same durability-before-memory ordering
 // as Put.
 func (s *MemStore) Delete(key []byte) error {
+	metrics.StorageDeleteTotal.Inc()
 	if len(key) == 0 {
 		return ErrEmptyKey
 	}
 	if err := s.log.Append(wal.Record{Type: wal.OpDelete, Key: key}); err != nil {
+		metrics.RecordError("storage")
 		return fmt.Errorf("storage: wal append: %w", err)
 	}
 	if err := s.log.Sync(); err != nil {
+		metrics.RecordError("storage")
 		return fmt.Errorf("storage: wal sync: %w", err)
 	}
+	logging.Default.Debug(logging.EventStorageDelete, "component", "storage", "key_size", len(key))
 	return s.mt.Delete(key)
 }
 
 // Close closes the underlying WAL file.
 func (s *MemStore) Close() error {
 	return s.log.Close()
+}
+
+// Snapshot implements Store. It returns every live entry currently in the
+// MemTable, in ascending key order -- it does not read or replay the WAL,
+// since the MemTable is already the authoritative in-memory reflection of
+// every WAL record applied so far.
+func (s *MemStore) Snapshot() ([]Entry, error) {
+	entries := s.mt.All()
+	out := make([]Entry, len(entries))
+	for i, e := range entries {
+		out[i] = Entry{Key: e.Key, Value: e.Value}
+	}
+	return out, nil
+}
+
+// Stats is a cheap, point-in-time diagnostic snapshot of this store's
+// current in-memory size -- see docs/observability/phase12-observability.md's
+// storage diagnostics section. Both fields are read from MemTable's own
+// incrementally-maintained counters (see memtable.MemTable.Len/Bytes), so
+// Stats never scans the MemTable's contents and is cheap to call on
+// every metrics scrape.
+type Stats struct {
+	MemTableEntries int
+	MemTableBytes   int64
+}
+
+// Stats returns this store's current Stats. It is the pull-source for
+// the forgedb_storage_memtable_entries/bytes gauges (wired up in
+// internal/dbnode, which is what actually constructs a MemStore).
+func (s *MemStore) Stats() Stats {
+	return Stats{MemTableEntries: s.mt.Len(), MemTableBytes: s.mt.Bytes()}
 }

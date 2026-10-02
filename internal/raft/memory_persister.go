@@ -23,6 +23,10 @@ type MemoryPersister struct {
 	state    PersistentState
 	has      bool
 	failNext bool
+
+	snapshot       Snapshot
+	hasSnapshot    bool
+	failNextSnapOp bool
 }
 
 // NewMemoryPersister returns an empty MemoryPersister with no saved
@@ -42,6 +46,19 @@ func (p *MemoryPersister) FailNextSave() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.failNext = true
+}
+
+// FailNextSnapshotSave arranges for the next call to SaveSnapshot to fail
+// (returning errSimulatedPersistFailure) without altering the persister's
+// saved snapshot, then behave normally again afterward -- the snapshot
+// analogue of FailNextSave, used to test the crash windows
+// docs/raft/phase9-snapshots.md describes around snapshot persistence
+// (e.g. CreateSnapshot must leave the in-memory log untouched if
+// SaveSnapshot itself fails).
+func (p *MemoryPersister) FailNextSnapshotSave() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.failNextSnapOp = true
 }
 
 // SaveState implements Persister. The saved state is deep-copied so a
@@ -77,6 +94,43 @@ func (p *MemoryPersister) LoadState() (PersistentState, error) {
 		CurrentTerm: p.state.CurrentTerm,
 		VotedFor:    p.state.VotedFor,
 		Log:         copyEntries(p.state.Log),
+	}, nil
+}
+
+// SaveSnapshot implements Persister. The saved snapshot's Data is
+// deep-copied so a caller mutating its own slice afterward cannot
+// retroactively alter what was "persisted" -- mirroring SaveState's own
+// isolation guarantee for Log entries.
+func (p *MemoryPersister) SaveSnapshot(snap Snapshot) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.failNextSnapOp {
+		p.failNextSnapOp = false
+		return errSimulatedPersistFailure
+	}
+
+	p.snapshot = Snapshot{
+		LastIncludedIndex: snap.LastIncludedIndex,
+		LastIncludedTerm:  snap.LastIncludedTerm,
+		Data:              append([]byte(nil), snap.Data...),
+	}
+	p.hasSnapshot = true
+	return nil
+}
+
+// LoadSnapshot implements Persister.
+func (p *MemoryPersister) LoadSnapshot() (Snapshot, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.hasSnapshot {
+		return Snapshot{}, ErrNoSnapshot
+	}
+	return Snapshot{
+		LastIncludedIndex: p.snapshot.LastIncludedIndex,
+		LastIncludedTerm:  p.snapshot.LastIncludedTerm,
+		Data:              append([]byte(nil), p.snapshot.Data...),
 	}, nil
 }
 

@@ -16,11 +16,15 @@
 package raft
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/Kushall-07/forgedb/internal/metrics"
 )
 
 // Role is a Raft node's current role in the consensus protocol. A node
@@ -200,6 +204,26 @@ type Node struct {
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
+
+	// snapshotData is the opaque state-machine payload of this node's
+	// most recent snapshot (see Snapshot, persist.go), kept in memory so
+	// a leader can hand it straight to a lagging peer via InstallSnapshot
+	// without re-reading the persister on every send. It is nil exactly
+	// when n.log.entries[0].Index == 0 (no snapshot has ever been created
+	// or installed); the two are always kept in sync (see CreateSnapshot
+	// and HandleInstallSnapshot in snapshot.go).
+	snapshotData []byte
+
+	// pendingSnapshot is set whenever this node has a snapshot (just
+	// installed via InstallSnapshot, or loaded from the persister at
+	// startup) whose data the caller's state machine has not yet
+	// confirmed restoring -- see PendingSnapshot and
+	// ConfirmSnapshotRestored in snapshot.go, and
+	// docs/raft/phase9-snapshots.md. It is nil once the state machine has
+	// caught up. This is never set by CreateSnapshot itself: that path's
+	// state machine is the snapshot's own source, already in exactly that
+	// state, with nothing to restore.
+	pendingSnapshot *Snapshot
 }
 
 // NewNode constructs a Node from opts. If opts.Persister has previously
@@ -237,7 +261,7 @@ func NewNode(opts Options) (*Node, error) {
 	}
 	rnd := opts.Rand
 	if rnd == nil {
-		rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
+		rnd = rand.New(rand.NewSource(randomSeed()))
 	}
 	persister := opts.Persister
 	if persister == nil {
@@ -259,17 +283,51 @@ func NewNode(opts Options) (*Node, error) {
 		stopCh:          make(chan struct{}),
 	}
 
-	state, err := persister.LoadState()
-	switch {
-	case errors.Is(err, ErrNoState):
-		n.log = NewLog()
-	case err != nil:
-		return nil, fmt.Errorf("raft: load persisted state: %w", err)
-	default:
+	state, stateErr := persister.LoadState()
+	hasState := stateErr == nil
+	if !hasState && !errors.Is(stateErr, ErrNoState) {
+		return nil, fmt.Errorf("raft: load persisted state: %w", stateErr)
+	}
+	if hasState {
 		n.currentTerm = state.CurrentTerm
 		n.votedFor = state.VotedFor
-		n.log = newLogFromEntries(state.Log)
 	}
+
+	snap, snapErr := persister.LoadSnapshot()
+	hasSnapshot := snapErr == nil
+	if !hasSnapshot && !errors.Is(snapErr, ErrNoSnapshot) {
+		return nil, fmt.Errorf("raft: load persisted snapshot: %w", snapErr)
+	}
+
+	logEntries := []LogEntry(nil)
+	if hasState {
+		logEntries = state.Log
+	}
+	var floorIndex, floorTerm uint64
+	if hasSnapshot {
+		floorIndex, floorTerm = snap.LastIncludedIndex, snap.LastIncludedTerm
+
+		// A crash between SaveSnapshot succeeding and the following,
+		// smaller SaveState succeeding can leave the persisted log still
+		// containing entries at or below the new snapshot boundary (see
+		// docs/raft/phase9-snapshots.md's crash-window analysis) --
+		// harmless, since the snapshot already covers them, as long as
+		// they are dropped here rather than re-applied.
+		var suffix []LogEntry
+		for _, e := range logEntries {
+			if e.Index > floorIndex {
+				suffix = append(suffix, e)
+			}
+		}
+		if len(suffix) > 0 && suffix[0].Index != floorIndex+1 {
+			return nil, fmt.Errorf("raft: persisted log has a gap after snapshot boundary %d (first retained entry is %d): %w", floorIndex, suffix[0].Index, ErrCorrupt)
+		}
+		logEntries = suffix
+
+		n.pendingSnapshot = &Snapshot{LastIncludedIndex: snap.LastIncludedIndex, LastIncludedTerm: snap.LastIncludedTerm, Data: snap.Data}
+		n.snapshotData = snap.Data
+	}
+	n.log = newLogFromEntries(floorIndex, floorTerm, logEntries)
 
 	n.resetElectionTimerLocked()
 	return n, nil
@@ -289,7 +347,7 @@ func NewNode(opts Options) (*Node, error) {
 // in) a term, vote, or log entry that a crash immediately afterward would
 // cause it to forget.
 func (n *Node) persistLocked() error {
-	logCopy := append([]LogEntry(nil), n.log.entries[1:]...) // exclude the index-0 sentinel
+	logCopy := append([]LogEntry(nil), n.log.entries[1:]...) // exclude the sentinel/snapshot boundary
 	return n.persister.SaveState(PersistentState{
 		CurrentTerm: n.currentTerm,
 		VotedFor:    n.votedFor,
@@ -297,14 +355,49 @@ func (n *Node) persistLocked() error {
 	})
 }
 
-// newLogFromEntries reconstructs a Log from a persisted (1-indexed, no
-// sentinel) entry slice, prepending the fixed index-0 sentinel that every
-// in-memory Log has (see Log).
-func newLogFromEntries(entries []LogEntry) *Log {
+// newLogFromEntries reconstructs a Log from a persisted, no-sentinel
+// entry slice, prepending a sentinel at (baseIndex, baseTerm) -- (0, 0)
+// for a node that has never created or installed a snapshot, or the
+// snapshot's own (LastIncludedIndex, LastIncludedTerm) otherwise (see
+// Log's doc comment and docs/raft/phase9-snapshots.md).
+func newLogFromEntries(baseIndex, baseTerm uint64, entries []LogEntry) *Log {
 	l := &Log{entries: make([]LogEntry, 0, len(entries)+1)}
-	l.entries = append(l.entries, LogEntry{Index: 0, Term: 0})
+	l.entries = append(l.entries, LogEntry{Index: baseIndex, Term: baseTerm})
 	l.entries = append(l.entries, entries...)
 	return l
+}
+
+// randomSeed returns a seed for Options.Rand's default source, drawn from
+// the OS's cryptographic entropy pool rather than time.Now().UnixNano().
+//
+// This matters for a reason that only shows up once Raft runs as real,
+// independent OS processes (Phase 14): on a coarse-resolution system
+// clock -- observed in practice on Windows, whose clock tick is
+// typically ~15ms -- two Node values default-constructed at nearly the
+// same wall-clock instant (either genuinely independent processes
+// started together, as a Docker Compose cluster does, or two NewNode
+// calls made in quick succession within the same process, as tests that
+// leave Options.Rand unset do) can read the identical UnixNano() value
+// and therefore seed byte-for-byte identical pseudo-random sequences.
+// Every subsequent "randomized" election timeout (resetElectionTimerLocked)
+// then comes out identical on both nodes, in lockstep, forever -- a
+// permanent, deterministic split vote that no number of retries resolves,
+// since nothing ever perturbs it. A cryptographically-seeded source makes
+// two concurrent calls draw independent seeds regardless of clock
+// resolution, which is all that is needed here: Options.Rand's own
+// documented purpose (randomizing election timeouts so split votes are
+// rare) is otherwise completely unaffected, and a caller that supplies
+// its own Options.Rand (every existing deterministic test) is never
+// affected by this at all.
+func randomSeed() int64 {
+	var buf [8]byte
+	if _, err := cryptorand.Read(buf[:]); err == nil {
+		return int64(binary.LittleEndian.Uint64(buf[:]))
+	}
+	// cryptorand.Read failing at all is practically unreachable on every
+	// supported platform; falling back to the previous time-based seed
+	// is still strictly better than leaving rnd nil.
+	return time.Now().UnixNano()
 }
 
 // ID returns the node's own ID.
@@ -368,16 +461,24 @@ func (n *Node) resetElectionTimerLocked() {
 // retried, exactly as if the message had been dropped.
 func (n *Node) becomeFollowerLocked(term uint64) error {
 	oldTerm, oldVotedFor := n.currentTerm, n.votedFor
+	wasCandidate := n.role == Candidate
 	n.currentTerm = term
 	n.votedFor = ""
 	if err := n.persistLocked(); err != nil {
 		n.currentTerm, n.votedFor = oldTerm, oldVotedFor
+		metrics.RecordError("raft")
 		return err
 	}
 	n.role = Follower
 	n.leaderID = ""
 	n.votesReceived = nil
 	n.resetElectionTimerLocked()
+
+	metrics.RaftHigherTermStepsDownTotal.Inc()
+	if wasCandidate {
+		metrics.RaftElectionsLostTotal.Inc()
+	}
+	logEvent(n.id).Info(eventStepDown, "term", term, "reason", "higher_term")
 	return nil
 }
 
