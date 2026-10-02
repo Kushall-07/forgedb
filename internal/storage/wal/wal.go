@@ -15,6 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/Kushall-07/forgedb/internal/logging"
+	"github.com/Kushall-07/forgedb/internal/metrics"
 )
 
 // ErrCorrupt indicates the WAL contains a complete, fully-framed record
@@ -25,6 +28,17 @@ import (
 // returned to the caller rather than skipped, since silently discarding a
 // corrupt record in the middle of the log could hide data loss.
 var ErrCorrupt = errors.New("wal: corrupt record")
+
+// errString returns err.Error(), or "" if err is nil -- used so a
+// logging call can pass a plain string field for an error that may or
+// may not be present, rather than slog having to format a nil error
+// value itself.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
 
 // WAL is an append-only, durable log of Records backed by a single file.
 // A WAL is safe for concurrent use.
@@ -85,12 +99,23 @@ func Open(path string) (*WAL, error) {
 //     silently resurrect stale state or drop data.
 //
 // If fn returns an error, Replay stops and returns it.
-func (w *WAL) Replay(fn func(Record) error) error {
+func (w *WAL) Replay(fn func(Record) error) (err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if _, err := w.f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("wal: seek to start for replay: %w", err)
+	metrics.WALRecoveryTotal.Inc()
+	var recordCount uint64
+	defer func() {
+		metrics.WALRecoveryRecordsTotal.Add(recordCount)
+		if errors.Is(err, ErrCorrupt) {
+			metrics.WALCorruptionErrorsTotal.Inc()
+			metrics.RecordError("wal")
+		}
+		logging.Default.Info(logging.EventWALRecovery, "component", "wal", "records", recordCount, "error", errString(err))
+	}()
+
+	if _, serr := w.f.Seek(0, io.SeekStart); serr != nil {
+		return fmt.Errorf("wal: seek to start for replay: %w", serr)
 	}
 	r := bufio.NewReader(w.f)
 
@@ -138,9 +163,10 @@ func (w *WAL) Replay(fn func(Record) error) error {
 			Key:   payload[:hdr.keyLen],
 			Value: payload[hdr.keyLen:],
 		}
-		if err := fn(rec); err != nil {
-			return fmt.Errorf("wal: apply record at offset %d: %w", offset, err)
+		if ferr := fn(rec); ferr != nil {
+			return fmt.Errorf("wal: apply record at offset %d: %w", offset, ferr)
 		}
+		recordCount++
 
 		offset += int64(headerSize) + int64(len(payload))
 	}
@@ -176,8 +202,12 @@ func (w *WAL) Append(rec Record) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, err := w.f.Write(data); err != nil {
+		metrics.RecordError("wal")
 		return fmt.Errorf("wal: append: %w", err)
 	}
+	metrics.WALAppendTotal.Inc()
+	metrics.WALBytesWrittenTotal.Add(uint64(len(data)))
+	logging.Default.Debug(logging.EventWALAppend, "component", "wal", "bytes", len(data))
 	return nil
 }
 
@@ -190,8 +220,11 @@ func (w *WAL) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.f.Sync(); err != nil {
+		metrics.RecordError("wal")
 		return fmt.Errorf("wal: sync: %w", err)
 	}
+	metrics.WALSyncTotal.Inc()
+	logging.Default.Debug(logging.EventWALSync, "component", "wal")
 	return nil
 }
 
