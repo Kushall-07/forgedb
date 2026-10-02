@@ -1,0 +1,23 @@
+# Version control and docs: never needed to compile the binary.
+.git
+.gitignore
+*.md
+docs/
+
+# Generated/data artifacts: not source, and some can be large.
+benchmark/results/
+coverage/
+coverage.out
+*.coverprofile
+*.log
+data/
+tmp/
+
+# Editor/IDE metadata.
+.vscode/
+.idea/
+.DS_Store
+
+# Local Docker artifacts never need to be in their own build context.
+docker-compose.yml
+deploy/scripts/

@@ -1,0 +1,81 @@
+// Phase 14 wire contract for ForgeDB's node-to-node Raft RPCs.
+//
+// This file is deliberately a thin transport contract: every message
+// mirrors a Go struct that already exists in internal/raft/message.go
+// field-for-field. It carries no business logic of its own -- Raft's
+// term handling, voting rules, log-matching, commit rules, and snapshot
+// rules all remain exactly as implemented in internal/raft; this proto
+// only describes how those messages' bytes travel between real OS
+// processes over gRPC (see internal/transport, which implements
+// raft.Transport and raft.RPCHandler on top of the generated code).
+syntax = "proto3";
+
+package forgedb.raft;
+
+option go_package = "github.com/Kushall-07/forgedb/api/proto/raftpb";
+
+// RaftTransport is the node-to-node service: every RPC here corresponds
+// exactly to one method of raft.Transport / raft.RPCHandler.
+service RaftTransport {
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteReply);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesReply);
+  rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotReply);
+}
+
+// LogEntry mirrors raft.LogEntry.
+message LogEntry {
+  uint64 index = 1;
+  uint64 term = 2;
+  bytes command = 3;
+}
+
+// RequestVoteRequest mirrors raft.RequestVoteArgs.
+message RequestVoteRequest {
+  uint64 term = 1;
+  string candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+
+// RequestVoteReply mirrors raft.RequestVoteReply.
+message RequestVoteReply {
+  uint64 term = 1;
+  bool vote_granted = 2;
+}
+
+// AppendEntriesRequest mirrors raft.AppendEntriesArgs. entries is empty
+// for a heartbeat.
+message AppendEntriesRequest {
+  uint64 term = 1;
+  string leader_id = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
+  repeated LogEntry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+// AppendEntriesReply mirrors raft.AppendEntriesReply.
+message AppendEntriesReply {
+  uint64 term = 1;
+  bool success = 2;
+}
+
+// InstallSnapshotRequest mirrors raft.InstallSnapshotArgs. data is the
+// entire serialized state-machine snapshot in one message -- Phase 9
+// does not chunk snapshots (see internal/raft/message.go), so the
+// transport bounds this with a deliberate, documented gRPC max-message
+// size (see internal/transport.DefaultMaxMessageBytes) rather than an
+// unlimited one.
+message InstallSnapshotRequest {
+  uint64 term = 1;
+  string leader_id = 2;
+  uint64 last_included_index = 3;
+  uint64 last_included_term = 4;
+  bytes data = 5;
+}
+
+// InstallSnapshotReply mirrors raft.InstallSnapshotReply.
+message InstallSnapshotReply {
+  uint64 term = 1;
+  bool success = 2;
+}

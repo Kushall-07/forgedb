@@ -1,0 +1,92 @@
+# Phase 14's three-node development/demo cluster. See
+# docs/deployment/phase14-docker-deployment.md for the full operational
+# guide (startup, health, leader discovery, failure testing, persistence,
+# reset). Every node:
+#   - runs the same image, built from ./Dockerfile
+#   - gets its own NODE_ID, its own persistent named volume at /data, and
+#     its own host-exposed HTTP/gRPC ports
+#   - shares the same PEERS roster and the same forgedb-net network, and
+#     addresses its peers by Compose service name (forgedb-1/2/3), never
+#     by localhost or a hard-coded IP -- see that doc's "network" section
+#     for why that distinction is load-bearing here.
+#
+# `docker compose up -d` starts all three; `docker compose down` stops
+# them and PRESERVES the named volumes (your data survives). Only
+# `docker compose down -v` deletes the volumes -- see the deployment doc
+# before ever running that.
+
+x-peers: &peers
+  PEERS: "node-1=forgedb-1:9090|forgedb-1:8080,node-2=forgedb-2:9090|forgedb-2:8080,node-3=forgedb-3:9090|forgedb-3:8080"
+
+services:
+  forgedb-1:
+    build: .
+    image: forgedb:latest
+    container_name: forgedb-1
+    hostname: forgedb-1
+    environment:
+      <<: *peers
+      NODE_ID: node-1
+      HTTP_ADDR: 0.0.0.0:8080
+      GRPC_ADDR: 0.0.0.0:9090
+      DATA_DIR: /data
+      LOG_LEVEL: info
+    ports:
+      - "8081:8080"
+      - "9091:9090"
+    volumes:
+      - forgedb-node1-data:/data
+    networks:
+      - forgedb-net
+    restart: unless-stopped
+
+  forgedb-2:
+    build: .
+    image: forgedb:latest
+    container_name: forgedb-2
+    hostname: forgedb-2
+    environment:
+      <<: *peers
+      NODE_ID: node-2
+      HTTP_ADDR: 0.0.0.0:8080
+      GRPC_ADDR: 0.0.0.0:9090
+      DATA_DIR: /data
+      LOG_LEVEL: info
+    ports:
+      - "8082:8080"
+      - "9092:9090"
+    volumes:
+      - forgedb-node2-data:/data
+    networks:
+      - forgedb-net
+    restart: unless-stopped
+
+  forgedb-3:
+    build: .
+    image: forgedb:latest
+    container_name: forgedb-3
+    hostname: forgedb-3
+    environment:
+      <<: *peers
+      NODE_ID: node-3
+      HTTP_ADDR: 0.0.0.0:8080
+      GRPC_ADDR: 0.0.0.0:9090
+      DATA_DIR: /data
+      LOG_LEVEL: info
+    ports:
+      - "8083:8080"
+      - "9093:9090"
+    volumes:
+      - forgedb-node3-data:/data
+    networks:
+      - forgedb-net
+    restart: unless-stopped
+
+networks:
+  forgedb-net:
+    driver: bridge
+
+volumes:
+  forgedb-node1-data:
+  forgedb-node2-data:
+  forgedb-node3-data:
