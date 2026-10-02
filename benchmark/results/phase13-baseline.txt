@@ -1,0 +1,210 @@
+go version go1.27.1 windows/amd64
+a0f9588c9763abf0e8beb533de5993cead9e559c
+---
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage/memtable
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkMemTablePut/64B-16                   	 1318880	       447.7 ns/op	 142.95 MB/s	     126 B/op	       4 allocs/op
+BenchmarkMemTablePut/256B-16                  	 1000000	       514.6 ns/op	 497.45 MB/s	     321 B/op	       4 allocs/op
+BenchmarkMemTablePut/1KiB-16                  	  864229	       690.0 ns/op	1483.97 MB/s	    1090 B/op	       4 allocs/op
+BenchmarkMemTablePut/4KiB-16                  	  428436	      1767 ns/op	2318.54 MB/s	    4173 B/op	       4 allocs/op
+BenchmarkMemTablePut/16KiB-16                 	  211130	      6789 ns/op	2413.41 MB/s	   16483 B/op	       4 allocs/op
+BenchmarkMemTablePut/64KiB-16                 	   88016	     12710 ns/op	5156.28 MB/s	   65683 B/op	       5 allocs/op
+BenchmarkMemTablePutSequentialGrowth-16       	 1000000	       531.3 ns/op	     402 B/op	       5 allocs/op
+BenchmarkMemTableGetHit/64B-16                	 1507244	       421.0 ns/op	      95 B/op	       2 allocs/op
+BenchmarkMemTableGetHit/256B-16               	 1369285	       429.8 ns/op	     288 B/op	       2 allocs/op
+BenchmarkMemTableGetHit/1KiB-16               	 1000000	       611.7 ns/op	    1056 B/op	       2 allocs/op
+BenchmarkMemTableGetHit/4KiB-16               	  538914	      1316 ns/op	    4128 B/op	       2 allocs/op
+BenchmarkMemTableGetHit/16KiB-16              	  202420	      3649 ns/op	   16416 B/op	       2 allocs/op
+BenchmarkMemTableGetHit/64KiB-16              	   41444	     43187 ns/op	   65568 B/op	       2 allocs/op
+BenchmarkMemTableGetMiss-16                   	 2445777	       224.3 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemTableDelete-16                    	 1344458	       388.5 ns/op	      55 B/op	       2 allocs/op
+BenchmarkMemTableMixed_ReadHeavy_90_10-16     	  487507	      1175 ns/op	     290 B/op	       3 allocs/op
+BenchmarkMemTableMixed_Balanced_50_50-16      	  515338	      1134 ns/op	     299 B/op	       3 allocs/op
+BenchmarkMemTableMixed_WriteHeavy_10_90-16    	  496905	      1092 ns/op	     309 B/op	       3 allocs/op
+BenchmarkMemTableConcurrentMixed/concurrency=1-16         	  299618	      1896 ns/op	     300 B/op	       3 allocs/op
+BenchmarkMemTableConcurrentMixed/concurrency=2-16         	  278979	      2297 ns/op	     300 B/op	       3 allocs/op
+BenchmarkMemTableConcurrentMixed/concurrency=4-16         	  255034	      2403 ns/op	     301 B/op	       3 allocs/op
+BenchmarkMemTableConcurrentMixed/concurrency=8-16         	  257878	      2030 ns/op	     302 B/op	       3 allocs/op
+BenchmarkMemTableConcurrentMixed/concurrency=16-16        	  286821	      2149 ns/op	     305 B/op	       3 allocs/op
+BenchmarkMemTableConcurrentMixed/concurrency=32-16        	  228590	      2362 ns/op	     312 B/op	       3 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/storage/memtable	32.959s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage/wal
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkWALAppendNoSync/64B-16               	  151800	      3520 ns/op	  18.18 MB/s	     144 B/op	       2 allocs/op
+BenchmarkWALAppendNoSync/256B-16              	  141852	      4096 ns/op	  62.50 MB/s	     360 B/op	       3 allocs/op
+BenchmarkWALAppendNoSync/1KiB-16              	  115932	      5350 ns/op	 191.42 MB/s	    1193 B/op	       4 allocs/op
+BenchmarkWALAppendNoSync/4KiB-16              	   70678	      9478 ns/op	 432.17 MB/s	    4910 B/op	       4 allocs/op
+BenchmarkWALAppendNoSync/16KiB-16             	   36830	     17494 ns/op	 936.56 MB/s	   18498 B/op	       4 allocs/op
+BenchmarkWALAppendNoSync/64KiB-16             	   13446	     44356 ns/op	1477.49 MB/s	   73876 B/op	       4 allocs/op
+BenchmarkWALAppendSync/64B-16                 	    1930	    278476 ns/op	   0.23 MB/s	     144 B/op	       2 allocs/op
+BenchmarkWALAppendSync/256B-16                	    2167	    273939 ns/op	   0.93 MB/s	     360 B/op	       3 allocs/op
+BenchmarkWALAppendSync/1KiB-16                	    2048	    281947 ns/op	   3.63 MB/s	    1192 B/op	       3 allocs/op
+BenchmarkWALAppendSync/4KiB-16                	    1983	    378311 ns/op	  10.83 MB/s	    4912 B/op	       3 allocs/op
+BenchmarkWALAppendSync/16KiB-16               	    1868	    320534 ns/op	  51.11 MB/s	   18499 B/op	       3 allocs/op
+BenchmarkWALAppendSync/64KiB-16               	    1484	    368305 ns/op	 177.94 MB/s	   73869 B/op	       3 allocs/op
+BenchmarkWALAppendSyncSequentialRecords-16    	     175	   3837806 ns/op	    3609 B/op	      38 allocs/op
+BenchmarkWALReplay/records=1000-16            	    1458	    402946 ns/op	  580625 B/op	    2004 allocs/op
+BenchmarkWALReplay/records=10000-16           	     127	   4361142 ns/op	 5768320 B/op	   20009 allocs/op
+BenchmarkWALReplay/records=100000-16          	      12	  44544925 ns/op	57645593 B/op	  200064 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/storage/wal	14.597s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkStorePut/64B-16                   	       3	   7382167 ns/op	   0.01 MB/s	     312 B/op	       6 allocs/op
+BenchmarkStorePut/256B-16                  	       3	   2912067 ns/op	   0.09 MB/s	     730 B/op	       8 allocs/op
+BenchmarkStorePut/1KiB-16                  	       3	    829500 ns/op	   1.23 MB/s	    2328 B/op	       8 allocs/op
+BenchmarkStorePut/4KiB-16                  	       3	   2172533 ns/op	   1.89 MB/s	    9112 B/op	       8 allocs/op
+BenchmarkStorePut/16KiB-16                 	       3	   2878233 ns/op	   5.69 MB/s	   34968 B/op	       8 allocs/op
+BenchmarkStorePut/64KiB-16                 	       3	   4411833 ns/op	  14.85 MB/s	  139416 B/op	       8 allocs/op
+BenchmarkStoreGet/64B-16                   	       3	      3167 ns/op	      88 B/op	       2 allocs/op
+BenchmarkStoreGet/256B-16                  	       3	      4800 ns/op	     280 B/op	       2 allocs/op
+BenchmarkStoreGet/1KiB-16                  	       3	      4833 ns/op	    1048 B/op	       2 allocs/op
+BenchmarkStoreGet/4KiB-16                  	       3	      6800 ns/op	    4120 B/op	       2 allocs/op
+BenchmarkStoreGet/16KiB-16                 	       3	     18433 ns/op	   16408 B/op	       2 allocs/op
+BenchmarkStoreGet/64KiB-16                 	       3	     21900 ns/op	   65560 B/op	       2 allocs/op
+BenchmarkStoreReadAfterWrite-16            	       3	   3246467 ns/op	    1000 B/op	       9 allocs/op
+BenchmarkStoreDelete-16                    	       3	   4534433 ns/op	      96 B/op	       3 allocs/op
+BenchmarkStoreMixed_ReadOnly_100_0-16      	       3	      9800 ns/op	     290 B/op	       3 allocs/op
+BenchmarkStoreMixed_ReadHeavy_90_10-16     	       3	      7067 ns/op	     290 B/op	       3 allocs/op
+BenchmarkStoreMixed_Balanced_50_50-16      	       3	    621900 ns/op	     410 B/op	       4 allocs/op
+BenchmarkStoreMixed_WriteHeavy_10_90-16    	       3	   3095933 ns/op	     650 B/op	       7 allocs/op
+BenchmarkStoreMixed_WriteOnly_0_100-16     	       3	   4929933 ns/op	     728 B/op	       8 allocs/op
+BenchmarkStoreConcurrentPut/concurrency=1-16         	       3	   2121400 ns/op	    3592 B/op	      25 allocs/op
+BenchmarkStoreConcurrentPut/concurrency=2-16         	       3	   4676700 ns/op	    6416 B/op	      42 allocs/op
+BenchmarkStoreConcurrentPut/concurrency=4-16         	       3	   6663200 ns/op	    4949 B/op	      58 allocs/op
+BenchmarkStoreConcurrentPut/concurrency=8-16         	       3	   2482467 ns/op	    5770 B/op	      99 allocs/op
+BenchmarkStoreConcurrentPut/concurrency=16-16        	       3	   3447000 ns/op	   11984 B/op	     191 allocs/op
+BenchmarkMemStoreReopen/records=1000-16              	       3	   7791367 ns/op	  952842 B/op	    6018 allocs/op
+BenchmarkMemStoreReopen/records=10000-16             	       3	  14596267 ns/op	 9482306 B/op	   60033 allocs/op
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkMemStoreReopen/records=100000-16         	       1	 132649300 ns/op	94718184 B/op	  600107 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/storage	1.830s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage/sstable
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkSSTableWrite/entries=100-16      	      58	   4176560 ns/op	  159982 B/op	     447 allocs/op
+BenchmarkSSTableWrite/entries=1000-16     	      40	   5767685 ns/op	 1422783 B/op	    4862 allocs/op
+BenchmarkSSTableWrite/entries=10000-16    	      13	  20368492 ns/op	19644260 B/op	   50488 allocs/op
+BenchmarkSSTableOpen/entries=100-16       	    4297	     51155 ns/op	    2041 B/op	      24 allocs/op
+BenchmarkSSTableOpen/entries=1000-16      	    3712	     59939 ns/op	   12529 B/op	      87 allocs/op
+BenchmarkSSTableOpen/entries=10000-16     	    1714	    123129 ns/op	  150479 B/op	     691 allocs/op
+BenchmarkSSTablePointLookupHit-16         	   27520	      9277 ns/op	   10823 B/op	      36 allocs/op
+BenchmarkSSTablePointLookupMiss-16        	  691263	       294.7 ns/op	     133 B/op	       3 allocs/op
+BenchmarkSSTableBloomNegativeLookup-16    	  878316	       279.9 ns/op	     133 B/op	       3 allocs/op
+BenchmarkSSTableIteratorScan/entries=1000-16         	     403	    532384 ns/op	  722031 B/op	    2402 allocs/op
+BenchmarkSSTableIteratorScan/entries=10000-16        	      39	   5256590 ns/op	 7216254 B/op	   24007 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/storage/sstable	5.442s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage/manifest
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkManifestAddTable/existingTables=10-16         	      40	   5565078 ns/op	    6366 B/op	      28 allocs/op
+BenchmarkManifestAddTable/existingTables=100-16        	      36	   9755550 ns/op	   18101 B/op	      30 allocs/op
+BenchmarkManifestAddTable/existingTables=1000-16       	      40	   9865758 ns/op	  140803 B/op	      35 allocs/op
+BenchmarkManifestReopen/tables=10-16                   	    4365	     60403 ns/op	    2561 B/op	      27 allocs/op
+BenchmarkManifestReopen/tables=100-16                  	    3290	     81383 ns/op	   13593 B/op	     116 allocs/op
+BenchmarkManifestReopen/tables=1000-16                 	     781	    298627 ns/op	  145243 B/op	    1018 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/storage/manifest	81.780s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/storage/compaction
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkCompactNonOverlapping/tables=2-16         	       5	 126916020 ns/op	  981971 B/op	    8343 allocs/op
+BenchmarkCompactNonOverlapping/tables=4-16         	       5	 109398680 ns/op	 2140521 B/op	   16575 allocs/op
+BenchmarkCompactNonOverlapping/tables=8-16         	       5	 194108720 ns/op	 4417200 B/op	   33048 allocs/op
+BenchmarkCompactOverlapping/tables=2-16            	       5	  69178280 ns/op	  678712 B/op	    6291 allocs/op
+BenchmarkCompactOverlapping/tables=4-16            	       5	 104416980 ns/op	 1025107 B/op	   10432 allocs/op
+BenchmarkCompactOverlapping/tables=8-16            	       5	 177642860 ns/op	 1716572 B/op	   18706 allocs/op
+BenchmarkCompactWithTombstones/tables=2-16         	       5	  65602860 ns/op	  659332 B/op	    5981 allocs/op
+BenchmarkCompactWithTombstones/tables=4-16         	       5	 136489780 ns/op	  998361 B/op	   10017 allocs/op
+BenchmarkCompactWithTombstones/tables=8-16         	       5	 181892300 ns/op	 1676931 B/op	   18088 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/storage/compaction	11.566s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/statemachine
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkApplyPutNew-16              	      86	   3684545 ns/op	     515 B/op	      13 allocs/op
+BenchmarkApplyDeleteNew-16           	     100	   3656553 ns/op	     386 B/op	       8 allocs/op
+BenchmarkApplyDuplicateRequest-16    	 2605464	        89.23 ns/op	      16 B/op	       1 allocs/op
+BenchmarkApplyNewVsDuplicate/New-16  	      63	   4281803 ns/op	     555 B/op	      13 allocs/op
+BenchmarkApplyNewVsDuplicate/Duplicate-16         	 2925394	        80.58 ns/op	      16 B/op	       1 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/statemachine	15.265s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/raft
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkRaftProposeThreeNode-16                	      50	     13764 ns/op	    6633 B/op	      22 allocs/op
+BenchmarkRaftProposeFiveNode-16                 	      50	      9810 ns/op	   11467 B/op	      32 allocs/op
+BenchmarkRaftProposeSingleNodeUnconfirmed-16    	      50	       410.0 ns/op	    1216 B/op	       3 allocs/op
+BenchmarkRaftReadIndexSingleNode-16             	      50	        34.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRaftReadIndexThreeNode-16              	      50	      5306 ns/op	     704 B/op	       8 allocs/op
+BenchmarkRaftReadIndexFiveNode-16               	      50	      6382 ns/op	    1280 B/op	      14 allocs/op
+BenchmarkRaftElectionConvergence/nodes=1-16     	      50	      5172 ns/op	    1547 B/op	      32 allocs/op
+BenchmarkRaftElectionConvergence/nodes=3-16     	      50	     19064 ns/op	    4174 B/op	      82 allocs/op
+BenchmarkRaftElectionConvergence/nodes=5-16     	      50	     42922 ns/op	    6521 B/op	     131 allocs/op
+BenchmarkRaftProposeConcurrent/concurrency=1-16 	      50	      5896 ns/op	    5876 B/op	      18 allocs/op
+BenchmarkRaftProposeConcurrent/concurrency=2-16 	      50	      6580 ns/op	    5990 B/op	      19 allocs/op
+BenchmarkRaftProposeConcurrent/concurrency=4-16 	      50	     20920 ns/op	    6683 B/op	      21 allocs/op
+BenchmarkRaftProposeConcurrent/concurrency=8-16 	      50	     21232 ns/op	    7126 B/op	      23 allocs/op
+BenchmarkRaftProposeConcurrent/concurrency=16-16         	      50	      7154 ns/op	    6876 B/op	      29 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/raft	1.261s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/internal/dbnode
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkDBNodePutThreeNode-16              	      20	  33219340 ns/op	   15500 B/op	     121 allocs/op
+BenchmarkDBNodePutFiveNode-16               	      20	  48448665 ns/op	   26433 B/op	     199 allocs/op
+BenchmarkDBNodeDeleteThreeNode-16           	      20	  22063025 ns/op	  106389 B/op	     104 allocs/op
+BenchmarkDBNodeGetLocal-16                  	      20	      1225 ns/op	      56 B/op	       3 allocs/op
+BenchmarkDBNodeConsistentGetThreeNode-16    	      20	     10990 ns/op	   13069 B/op	      11 allocs/op
+BenchmarkDBNodeConsistentGetFiveNode-16     	      20	     12075 ns/op	   25743 B/op	      17 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/internal/dbnode	26.666s
+
+goos: windows
+goarch: amd64
+pkg: github.com/Kushall-07/forgedb/benchmark/endtoend
+cpu: 13th Gen Intel(R) Core(TM) i5-13450HX
+BenchmarkWorkloadMix/nodes=3/Writes100-16         	      10	  36587060 ns/op	        27.33 logical-ops/sec	        16.33 p50-ms	        28.24 p95-ms	        28.24 p99-ms	   77020 B/op	     132 allocs/op
+BenchmarkWorkloadMix/nodes=3/ReadHeavy90_10-16    	      10	   3568970 ns/op	       280.3 logical-ops/sec	         0 p50-ms	        11.86 p95-ms	        11.86 p99-ms	   21941 B/op	      38 allocs/op
+BenchmarkWorkloadMix/nodes=3/Balanced50_50-16     	      10	   8150940 ns/op	       122.7 logical-ops/sec	         0 p50-ms	        19.17 p95-ms	        19.17 p99-ms	   42892 B/op	      73 allocs/op
+BenchmarkWorkloadMix/nodes=3/WriteHeavy10_90-16   	      10	  16205720 ns/op	        61.71 logical-ops/sec	        15.38 p50-ms	        20.90 p95-ms	        20.90 p99-ms	   77306 B/op	     132 allocs/op
+BenchmarkWorkloadMix/nodes=3/Reads100-16          	      10	      9900 ns/op	    104712 logical-ops/sec	         0 p50-ms	         0 p95-ms	         0 p99-ms	    9255 B/op	      15 allocs/op
+BenchmarkWorkloadMix/nodes=5/Writes100-16         	      10	  23936800 ns/op	        41.78 logical-ops/sec	        25.36 p50-ms	        33.83 p95-ms	        33.83 p99-ms	  137748 B/op	     206 allocs/op
+BenchmarkWorkloadMix/nodes=5/ReadHeavy90_10-16    	      10	   4937880 ns/op	       202.5 logical-ops/sec	         0 p50-ms	        19.31 p95-ms	        19.31 p99-ms	   40415 B/op	      58 allocs/op
+BenchmarkWorkloadMix/nodes=5/Balanced50_50-16     	      10	  11611210 ns/op	        86.13 logical-ops/sec	         0 p50-ms	        24.91 p95-ms	        24.91 p99-ms	   77602 B/op	     112 allocs/op
+BenchmarkWorkloadMix/nodes=5/WriteHeavy10_90-16   	      10	  32226550 ns/op	        31.03 logical-ops/sec	        26.56 p50-ms	        38.96 p95-ms	        38.96 p99-ms	  137820 B/op	     204 allocs/op
+BenchmarkWorkloadMix/nodes=5/Reads100-16          	      10	     24780 ns/op	     41118 logical-ops/sec	         0 p50-ms	         0 p95-ms	         0 p99-ms	   18149 B/op	      22 allocs/op
+BenchmarkKeyDistribution/Uniform-16               	      10	  10874130 ns/op	        91.97 logical-ops/sec	         0 p50-ms	        27.25 p95-ms	        27.25 p99-ms	   42723 B/op	      73 allocs/op
+BenchmarkKeyDistribution/HotSet80_20-16           	      10	   6432000 ns/op	       155.5 logical-ops/sec	         0 p50-ms	        15.76 p95-ms	        15.76 p99-ms	   36489 B/op	      62 allocs/op
+BenchmarkKeyDistribution/Sequential-16            	      10	   7551100 ns/op	       132.4 logical-ops/sec	         0 p50-ms	        20.32 p95-ms	        20.32 p99-ms	   42723 B/op	      73 allocs/op
+BenchmarkValueSize/256B-16                        	      10	  11355220 ns/op	        88.08 logical-ops/sec	         0 p50-ms	        29.00 p95-ms	        29.00 p99-ms	   45260 B/op	      76 allocs/op
+BenchmarkValueSize/4KiB-16                        	      10	  11108980 ns/op	        90.03 logical-ops/sec	         0.5130 p50-ms	        28.45 p95-ms	        28.45 p99-ms	   93499 B/op	      76 allocs/op
+BenchmarkValueSize/64KiB-16                       	      10	   9328290 ns/op	       107.2 logical-ops/sec	         0 p50-ms	        19.80 p95-ms	        19.80 p99-ms	  851612 B/op	      79 allocs/op
+PASS
+ok  	github.com/Kushall-07/forgedb/benchmark/endtoend	73.248s
