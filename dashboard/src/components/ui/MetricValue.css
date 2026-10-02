@@ -1,0 +1,60 @@
+.metric-value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  padding: var(--sc-4) var(--sc-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--sc-hairline);
+  background: color-mix(in oklab, var(--surface-1) 88%, transparent);
+  min-width: 0;
+}
+
+.metric-value__value {
+  font-size: var(--sc-t-xl);
+  font-weight: 500;
+  color: var(--sc-ink);
+  letter-spacing: var(--sc-track-snug);
+  line-height: 1.1;
+}
+
+.metric-value__footnote {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+/* The one metric that carries the strongest visual weight on the row. */
+.metric-value--emphasis {
+  background: linear-gradient(160deg, color-mix(in oklab, var(--status-sync) 14%, var(--surface-1)), var(--surface-1));
+  border-color: var(--status-sync-border);
+  box-shadow: var(--sc-e2);
+}
+.metric-value--emphasis .metric-value__value {
+  font-size: var(--sc-t-2xl);
+  color: var(--status-sync);
+}
+
+.metric-value--sync .metric-value__value {
+  color: var(--status-sync);
+}
+.metric-value--identity .metric-value__value {
+  color: var(--status-identity);
+}
+.metric-value--warn .metric-value__value {
+  color: var(--status-warn);
+}
+.metric-value--critical .metric-value__value {
+  color: var(--status-critical);
+}
+
+@media (max-width: 860px) {
+  .metric-value {
+    padding: var(--sc-3) var(--sc-4);
+  }
+  .metric-value__value {
+    font-size: var(--sc-t-lg);
+  }
+  .metric-value--emphasis .metric-value__value {
+    font-size: var(--sc-t-xl);
+  }
+}

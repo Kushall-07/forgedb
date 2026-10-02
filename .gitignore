@@ -17,3 +17,7 @@
 # OS
 .DS_Store
 Thumbs.db
+
+# Dashboard build artifacts
+/dashboard/dist/
+/dashboard/node_modules/

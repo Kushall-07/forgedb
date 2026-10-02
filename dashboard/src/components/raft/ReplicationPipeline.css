@@ -1,0 +1,127 @@
+.replication-pipeline {
+  margin-bottom: var(--sc-9);
+}
+
+.replication-pipeline__flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sc-2);
+  padding: var(--sc-6);
+  border-radius: var(--radius-lg);
+}
+
+.replication-pipeline__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sc-2);
+  min-width: 140px;
+  flex: 1 1 140px;
+  padding: var(--sc-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--sc-hairline-strong);
+  background: color-mix(in oklab, var(--surface-2) 70%, transparent);
+  text-align: center;
+}
+
+.replication-pipeline__stage--leader {
+  border-color: var(--status-identity-border);
+  background: linear-gradient(
+    165deg,
+    color-mix(in oklab, var(--status-identity) 12%, var(--surface-1)),
+    var(--surface-1)
+  );
+}
+
+.replication-pipeline__stage--majority,
+.replication-pipeline__stage--commit,
+.replication-pipeline__stage--apply {
+  border-color: var(--status-sync-border);
+}
+
+.replication-pipeline__stage-label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+}
+
+.replication-pipeline__stage-value {
+  font-size: var(--sc-t-lg);
+  color: var(--sc-ink);
+}
+
+.replication-pipeline__stage--leader .replication-pipeline__stage-value {
+  color: var(--status-identity);
+}
+.replication-pipeline__stage--majority .replication-pipeline__stage-value,
+.replication-pipeline__stage--commit .replication-pipeline__stage-value,
+.replication-pipeline__stage--apply .replication-pipeline__stage-value {
+  color: var(--status-sync);
+}
+
+.replication-pipeline__followers {
+  display: flex;
+  gap: var(--sc-2);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.replication-pipeline__follower {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--sc-hairline-strong);
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink);
+}
+
+.replication-pipeline__connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--sc-ink-soft);
+}
+
+.replication-pipeline__arrow {
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--status-sync);
+  transition: transform var(--sc-d-base) var(--sc-ease-out);
+}
+.replication-pipeline__arrow::before {
+  content: '\2192';
+}
+
+.replication-pipeline__connector-label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  white-space: nowrap;
+}
+
+.replication-pipeline__caption {
+  margin-top: var(--sc-4);
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}
+
+@media (max-width: 860px) {
+  .replication-pipeline__flow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .replication-pipeline__stage {
+    width: 100%;
+  }
+  .replication-pipeline__arrow {
+    display: inline-block;
+    transform: rotate(90deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .replication-pipeline__arrow {
+    transition: none;
+  }
+}

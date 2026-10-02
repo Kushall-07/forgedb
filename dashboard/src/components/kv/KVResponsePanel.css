@@ -1,0 +1,119 @@
+.kv-response {
+  margin-bottom: var(--sc-7);
+}
+
+.kv-response__panel {
+  padding: var(--sc-5) var(--sc-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-5);
+  min-height: 100%;
+}
+
+.kv-response__status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sc-3);
+  flex-wrap: wrap;
+}
+
+.kv-response__request-id {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.kv-response__metrics {
+  display: grid;
+  /* minmax(0, 1fr), not 1fr: a bare 1fr track still floors its width at the
+     item's min-content size, so an unbreakable value (e.g. "LINEARIZABLE")
+     blows the track — and the card — wider than the grid. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sc-3);
+}
+
+/* Metric cards reused from the shared MetricValue primitive, sized for this
+   dense 3-up technical grid. Scoped to this panel only: the shared
+   component/CSS is untouched, so Overview/Cluster's use of MetricValue is
+   unaffected. */
+.kv-response__metrics .metric-value {
+  min-width: 0;
+}
+
+.kv-response__metrics .metric-value__value {
+  max-width: 100%;
+  box-sizing: border-box;
+  font-size: var(--sc-t-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Node is the only identity-toned metric here; keep "NODE-2" from breaking
+   at its hyphen (overflow-wrap can't be told to skip one character), since
+   it's short enough to always fit at this font size without wrapping. */
+.kv-response__metrics .metric-value--identity .metric-value__value {
+  white-space: nowrap;
+}
+
+.kv-response__note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sc-3);
+  flex-wrap: wrap;
+  padding: var(--sc-3) var(--sc-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--status-identity-border);
+  background: var(--status-identity-soft);
+}
+.kv-response__note p {
+  margin: 0;
+  flex-basis: 100%;
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}
+
+.kv-response__body-block {
+  margin: 0;
+  padding: var(--sc-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--sc-hairline);
+  background: color-mix(in oklab, var(--sc-canvas) 70%, var(--surface-1));
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.kv-response__error {
+  margin: 0;
+  font-size: var(--sc-t-sm);
+  color: var(--status-warn);
+}
+
+.kv-response__waiting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--sc-7) var(--sc-4);
+  flex: 1;
+}
+.kv-response__waiting-text {
+  margin: 0;
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+  max-width: 36ch;
+}
+
+@media (max-width: 860px) {
+  .kv-response__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .kv-response__panel {
+    padding: var(--sc-4);
+  }
+}

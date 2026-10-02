@@ -1,0 +1,27 @@
+.snapshot-state {
+  margin-bottom: var(--sc-9);
+}
+
+.snapshot-state__metrics {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--sc-3);
+}
+
+.snapshot-state__note {
+  margin: var(--sc-4) 0 0;
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}
+
+@media (max-width: 900px) {
+  .snapshot-state__metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .snapshot-state__metrics {
+    grid-template-columns: 1fr;
+  }
+}

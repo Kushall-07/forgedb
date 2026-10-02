@@ -1,0 +1,89 @@
+.raft-summary {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 1.3fr;
+  gap: var(--sc-3);
+  margin-bottom: var(--sc-8);
+}
+
+@media (max-width: 1200px) {
+  .raft-summary {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .raft-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/*
+ * Leader value ("NODE-2") must stay on one line and fully visible — never
+ * wrapped, never truncated. The shared MetricValue emphasis style sizes its
+ * value at --sc-t-2xl (up to 3.4rem), which this card's share of the 8-metric
+ * grid is too narrow to hold at a mono-space, hyphenated identifier's width.
+ * Scoped to this one card (via the emphasis+identity combination only the
+ * Leader metric uses in this grid) rather than touching MetricValue.css, so
+ * Cluster/Overview's own emphasis metrics are unaffected. The sizes below are
+ * fixed (not the --sc-t-* scale) and sized to the narrowest point this
+ * column actually reaches in the grid, including just above each breakpoint,
+ * so "NODE-2" always has room without the card needing to grow.
+ */
+.raft-summary .metric-value--emphasis.metric-value--identity .metric-value__value {
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 1.1rem;
+}
+
+@media (max-width: 1200px) {
+  .raft-summary .metric-value--emphasis.metric-value--identity .metric-value__value {
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .raft-summary .metric-value--emphasis.metric-value--identity .metric-value__value {
+    font-size: 1rem;
+  }
+}
+
+/*
+ * Election State value ("STABLE") must stay on one line and fully contained
+ * — never wrapped, never truncated. Its card is the 7th metric in this grid
+ * (grid-template-columns above: 1fr of 8.9fr total), which at common laptop
+ * widths (~1300-1450px wide, the grid's 8-column layout is still active
+ * there since that only drops to 4 columns at 1200px) does not have enough
+ * room at the base --sc-t-xl value size for a 6-character mono word.
+ *
+ * Scoped with :nth-child(7) rather than a shared class, because Election
+ * State shares its tone ("sync", no emphasis) with Majority and Replication
+ * in this same grid, and those two must keep their current sizing/wrapping
+ * untouched. If the metric order in RaftSummary.tsx ever changes, this
+ * selector's index must move with the Election State card.
+ *
+ * Sizes step down as the 8-column row gets tighter, then back up once the
+ * grid itself switches to 4 columns at 1200px and there is room again.
+ */
+.raft-summary > :nth-child(7) .metric-value__value {
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 1.1rem;
+}
+
+@media (max-width: 1450px) {
+  .raft-summary > :nth-child(7) .metric-value__value {
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 1300px) {
+  .raft-summary > :nth-child(7) .metric-value__value {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 1200px) {
+  .raft-summary > :nth-child(7) .metric-value__value {
+    font-size: 1rem;
+  }
+}

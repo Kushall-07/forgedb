@@ -1,0 +1,38 @@
+.app-shell {
+  position: relative;
+  min-height: 100svh;
+}
+
+.app-shell__content {
+  margin-left: var(--shell-sidebar-w);
+  position: relative;
+  z-index: 1;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell__main {
+  flex: 1;
+  padding: var(--sc-7) var(--shell-gutter) var(--sc-9);
+}
+
+.app-shell__scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in oklab, var(--sc-canvas) 60%, transparent);
+  z-index: calc(var(--sc-z-chrome) - 1);
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .app-shell__content {
+    margin-left: 0;
+  }
+  .app-shell__main {
+    padding: var(--sc-6) var(--shell-gutter) var(--sc-8);
+  }
+  .app-shell__scrim {
+    display: block;
+  }
+}

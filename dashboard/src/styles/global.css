@@ -1,0 +1,88 @@
+@import '../lib/scrollcraft/scrollcraft.css';
+@import './tokens.css';
+
+/* ============================================================================
+   App-level base. scrollcraft.css already supplies the reset, the type ramp,
+   selection/focus/scrollbar theming and the reduced-motion floor; this file
+   only adds what an application shell needs on top of a token-driven page.
+   ========================================================================== */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--sc-font-text);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--sc-font-display);
+}
+
+code,
+.mono {
+  font-family: var(--sc-font-mono);
+}
+
+a {
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+/* Keyboard users only; a sighted mouse user never needs this text in flow. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A faint technical grid, the control-room ground every surface sits on top
+   of. Fixed and behind everything; never competes with real content. */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--sc-ink) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--sc-ink) 5%, transparent) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(120% 90% at 50% 0%, black 0%, transparent 78%);
+}
+
+/* Panels: the one raised-surface shape used across the app. Shadow has
+   offset+blur, tinted to the canvas, plus a 1px edge highlight on the lip. */
+.panel {
+  background: color-mix(in oklab, var(--surface-1) 92%, transparent);
+  border: 1px solid var(--sc-hairline);
+  border-radius: var(--radius-md);
+  box-shadow: var(--sc-e1), var(--sc-edge);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--sc-ink) 18%, transparent);
+  border-radius: var(--radius-sm);
+}

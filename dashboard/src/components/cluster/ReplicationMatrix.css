@@ -1,0 +1,71 @@
+.replication-matrix {
+  margin-bottom: var(--sc-9);
+}
+
+.replication-matrix__table-wrap {
+  overflow-x: auto;
+}
+
+.replication-matrix__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--sc-t-sm);
+}
+
+.replication-matrix__table th,
+.replication-matrix__table td {
+  padding: var(--sc-3) var(--sc-4);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.replication-matrix__table thead th {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+  border-bottom: 1px solid var(--sc-hairline-strong);
+}
+
+.replication-matrix__table tbody tr {
+  border-bottom: 1px solid var(--sc-hairline);
+  transition: background-color var(--sc-d-fast) var(--sc-ease-out);
+}
+.replication-matrix__table tbody tr:last-child {
+  border-bottom: none;
+}
+.replication-matrix__table tbody tr:hover {
+  background: color-mix(in oklab, var(--sc-ink) 4%, transparent);
+}
+
+.replication-matrix__table td {
+  color: var(--sc-ink);
+}
+
+.replication-matrix__state {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-3);
+}
+
+.replication-matrix__bar {
+  display: inline-block;
+  width: 48px;
+  height: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--sc-hairline-strong);
+  position: relative;
+  overflow: hidden;
+}
+.replication-matrix__bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  background: var(--status-sync);
+}
+.replication-matrix__bar--partial::before {
+  background: var(--status-warn);
+  right: 50%;
+}

@@ -1,0 +1,20 @@
+.kv-console__split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  gap: var(--sc-6);
+  margin-bottom: var(--sc-2);
+}
+
+.kv-console__split > .kv-workspace,
+.kv-console__split > .kv-response {
+  margin-bottom: 0;
+  height: 100%;
+}
+
+@media (max-width: 1100px) {
+  .kv-console__split {
+    grid-template-columns: 1fr;
+    gap: var(--sc-5);
+  }
+}

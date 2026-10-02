@@ -1,0 +1,112 @@
+.node-card {
+  position: relative;
+  width: 100%;
+  background: color-mix(in oklab, var(--surface-1) 90%, transparent);
+  border: 1px solid var(--sc-hairline);
+  border-radius: var(--radius-md);
+  padding: var(--sc-4);
+  box-shadow: var(--sc-e1), var(--sc-edge);
+  transition: border-color var(--sc-d-base) var(--sc-ease-out), box-shadow var(--sc-d-base) var(--sc-ease-out);
+}
+.node-card:focus-visible {
+  outline: 2px solid var(--sc-accent);
+  outline-offset: 3px;
+}
+
+.node-card--leader {
+  padding: var(--sc-5);
+  border-color: var(--status-sync-border);
+  background: linear-gradient(165deg, color-mix(in oklab, var(--status-sync) 10%, var(--surface-1)), var(--surface-1));
+  box-shadow: var(--sc-e2), var(--sc-edge);
+}
+
+.node-card--warn.node-card--follower {
+  border-color: var(--status-warn-border);
+}
+.node-card--critical.node-card--follower {
+  border-color: var(--status-critical-border);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .node-card:hover {
+    border-color: var(--status-sync-border);
+    box-shadow: var(--sc-e2), var(--sc-edge);
+  }
+}
+
+.node-card__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 10rem;
+}
+
+.node-card__id {
+  font-size: var(--sc-t-lg);
+  font-weight: 500;
+  color: var(--sc-ink);
+  letter-spacing: var(--sc-track-snug);
+}
+
+.node-card__meta {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+  letter-spacing: var(--sc-track-wide);
+}
+
+/* The technical detail panel: in the DOM (and so always available to a
+   screen reader) but visually and interactively inert until the card is
+   hovered or keyboard-focused. */
+.node-card__detail {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 0;
+  padding: var(--sc-3) var(--sc-4);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--sc-hairline-strong);
+  box-shadow: var(--sc-e3);
+  opacity: 0;
+  transform: translate3d(0, -4px, 0);
+  pointer-events: none;
+  transition: opacity var(--sc-d-base) var(--sc-ease-out), transform var(--sc-d-base) var(--sc-ease-out);
+}
+
+.node-card:hover .node-card__detail,
+.node-card:focus-visible .node-card__detail,
+.node-card:focus-within .node-card__detail {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.node-card__detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sc-3);
+  padding: 3px 0;
+  font-size: var(--sc-t-xs);
+}
+.node-card__detail-row + .node-card__detail-row {
+  border-top: 1px solid var(--sc-hairline);
+}
+.node-card__detail-row dt {
+  color: var(--sc-ink-soft);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+}
+.node-card__detail-row dd {
+  margin: 0;
+  color: var(--sc-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node-card,
+  .node-card__detail {
+    transition: opacity 180ms linear;
+  }
+}

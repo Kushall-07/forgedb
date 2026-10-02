@@ -1,0 +1,45 @@
+.raft-replication-matrix {
+  margin-bottom: var(--sc-9);
+}
+
+.raft-replication-matrix__table-wrap {
+  overflow-x: auto;
+}
+
+.raft-replication-matrix__table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+  font-size: var(--sc-t-sm);
+}
+
+.raft-replication-matrix__table th,
+.raft-replication-matrix__table td {
+  padding: var(--sc-3) var(--sc-4);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.raft-replication-matrix__table thead th {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+  border-bottom: 1px solid var(--sc-hairline-strong);
+}
+
+.raft-replication-matrix__table tbody tr {
+  border-bottom: 1px solid var(--sc-hairline);
+  transition: background-color var(--sc-d-fast) var(--sc-ease-out);
+}
+.raft-replication-matrix__table tbody tr:last-child {
+  border-bottom: none;
+}
+.raft-replication-matrix__table tbody tr:hover {
+  background: color-mix(in oklab, var(--sc-ink) 4%, transparent);
+}
+
+.raft-replication-matrix__table td {
+  color: var(--sc-ink);
+}

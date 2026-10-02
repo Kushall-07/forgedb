@@ -1,0 +1,74 @@
+/* ============================================================================
+   ForgeDB control-plane tokens
+   ----------------------------------------------------------------------------
+   Overrides the scroll-craft taste floor (src/lib/scrollcraft/scrollcraft.css)
+   for a dark distributed-systems console rather than a marketing page, then
+   adds a small set of SEMANTIC STATUS tokens on top. Status colour is the
+   primary language of this product (consensus/replication/health), so it is
+   deliberately layered above the brand accent instead of folded into it:
+
+     --status-sync      cyan    healthy, synchronized, active replication
+     --status-identity   violet  ForgeDB identity / secondary accent
+     --status-warn       amber   lag, transitional state
+     --status-critical   red     failure, offline, unavailable
+
+   Each status token also gets a "-ink" pairing for text that sits on a solid
+   fill of that colour, and a "-soft" background wash for chips/badges.
+   ========================================================================== */
+
+:root {
+  /* ---- scroll-craft floor: colour roles ---------------------------------- */
+  --sc-canvas: #0a0b0d;
+  --sc-surface: #13151a;
+  --sc-ink: #f1f2f5;
+  --sc-ink-soft: #8d93a3;
+  --sc-accent: #35d8e0;
+  --sc-accent-ink: #06161a;
+
+  --sc-hairline: color-mix(in oklab, var(--sc-ink) 10%, transparent);
+  --sc-hairline-strong: color-mix(in oklab, var(--sc-ink) 20%, transparent);
+
+  /* ---- scroll-craft floor: type ------------------------------------------ */
+  --sc-font-display: 'Space Grotesk', system-ui, sans-serif;
+  --sc-font-text: 'Inter', system-ui, sans-serif;
+  --sc-font-mono: 'JetBrains Mono', ui-monospace, 'Consolas', monospace;
+
+  /* ---- surfaces raised further off the canvas ---------------------------- */
+  --surface-1: var(--sc-surface);
+  --surface-2: #191c22;
+  --surface-3: #20232b;
+
+  /* ---- semantic status language ------------------------------------------ */
+  --status-sync: #35d8e0;
+  --status-sync-ink: #04171a;
+  --status-sync-soft: color-mix(in oklab, var(--status-sync) 14%, transparent);
+  --status-sync-border: color-mix(in oklab, var(--status-sync) 40%, transparent);
+
+  --status-identity: #9c8cff;
+  --status-identity-ink: #11102a;
+  --status-identity-soft: color-mix(in oklab, var(--status-identity) 16%, transparent);
+  --status-identity-border: color-mix(in oklab, var(--status-identity) 42%, transparent);
+
+  --status-warn: #f0ab3d;
+  --status-warn-ink: #241502;
+  --status-warn-soft: color-mix(in oklab, var(--status-warn) 16%, transparent);
+  --status-warn-border: color-mix(in oklab, var(--status-warn) 42%, transparent);
+
+  --status-critical: #f0555c;
+  --status-critical-ink: #230608;
+  --status-critical-soft: color-mix(in oklab, var(--status-critical) 16%, transparent);
+  --status-critical-border: color-mix(in oklab, var(--status-critical) 42%, transparent);
+
+  /* ---- layout -------------------------------------------------------------
+     A fixed sidebar width plus a fluid content gutter, rather than reusing
+     --sc-gutter/--sc-maxw everywhere: the shell is an application frame, not
+     a centred document column. */
+  --shell-sidebar-w: 248px;
+  --shell-sidebar-w-collapsed: 72px;
+  --shell-topbar-h: 56px;
+  --shell-gutter: clamp(1.25rem, 2.5vw, 2.5rem);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+}

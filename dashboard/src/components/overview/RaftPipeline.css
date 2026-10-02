@@ -1,0 +1,85 @@
+.raft-pipeline {
+  margin-bottom: var(--sc-9);
+}
+
+.raft-pipeline__track {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: var(--sc-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--sc-hairline);
+  background: color-mix(in oklab, var(--surface-1) 85%, transparent);
+  overflow-x: auto;
+}
+
+.raft-pipeline__stage {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-3);
+  flex: 1 1 0;
+  min-width: max-content;
+}
+
+.raft-pipeline__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sc-ink-soft);
+  flex: none;
+  position: relative;
+}
+.raft-pipeline__dot::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  background: var(--status-sync);
+  opacity: 0;
+  animation: raft-wave 4s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.5s);
+}
+
+.raft-pipeline__label {
+  font-size: var(--sc-t-sm);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink);
+}
+
+.raft-pipeline__arrow {
+  color: var(--sc-ink-soft);
+  margin-inline: var(--sc-5);
+  flex: none;
+}
+
+@keyframes raft-wave {
+  0%,
+  88%,
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  8% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  22% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .raft-pipeline__dot::after {
+    animation: none;
+    opacity: 0.35;
+  }
+}
+
+@media (max-width: 860px) {
+  .raft-pipeline__arrow {
+    margin-inline: var(--sc-3);
+  }
+}

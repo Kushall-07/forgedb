@@ -1,0 +1,248 @@
+.kv-workspace {
+  margin-bottom: var(--sc-7);
+}
+
+.kv-workspace__panel {
+  padding: var(--sc-5) var(--sc-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-5);
+}
+
+.kv-workspace__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+}
+
+.kv-workspace__row--split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sc-4);
+}
+
+.kv-workspace__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+}
+
+/* ---- operation tabs ----------------------------------------------------- */
+.kv-workspace__tabs {
+  display: inline-flex;
+  border: 1px solid var(--sc-hairline-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  width: max-content;
+}
+
+.kv-workspace__tab {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-sm);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+  padding: var(--sc-2) var(--sc-5);
+  background: transparent;
+  border-right: 1px solid var(--sc-hairline-strong);
+  transition: background-color var(--sc-d-fast) var(--sc-ease-out), color var(--sc-d-fast) var(--sc-ease-out);
+}
+.kv-workspace__tab:last-child {
+  border-right: none;
+}
+.kv-workspace__tab:hover {
+  color: var(--sc-ink);
+  background: color-mix(in oklab, var(--sc-ink) 6%, transparent);
+}
+.kv-workspace__tab--active.kv-workspace__tab--get {
+  color: var(--status-sync-ink);
+  background: var(--status-sync);
+}
+.kv-workspace__tab--active.kv-workspace__tab--put {
+  color: var(--status-identity-ink);
+  background: var(--status-identity);
+}
+.kv-workspace__tab--active.kv-workspace__tab--delete {
+  color: var(--status-critical-ink);
+  background: var(--status-critical);
+}
+
+/* ---- selects / inputs --------------------------------------------------- */
+.kv-workspace__select,
+.kv-workspace__input,
+.kv-workspace__textarea {
+  width: 100%;
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink);
+  background: color-mix(in oklab, var(--sc-canvas) 60%, var(--surface-1));
+  border: 1px solid var(--sc-hairline-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sc-3) var(--sc-4);
+  transition: border-color var(--sc-d-fast) var(--sc-ease-out);
+}
+.kv-workspace__select:focus-visible,
+.kv-workspace__input:focus-visible,
+.kv-workspace__textarea:focus-visible {
+  outline: none;
+  border-color: var(--sc-accent);
+}
+.kv-workspace__textarea {
+  resize: vertical;
+  min-height: 7rem;
+  line-height: 1.5;
+}
+.kv-workspace__select {
+  appearance: none;
+  cursor: pointer;
+}
+
+.kv-workspace__disabled-note {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+  border: 1px dashed var(--sc-hairline-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sc-4);
+  text-align: center;
+}
+
+/* ---- example keys --------------------------------------------------------- */
+.kv-workspace__examples {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-2);
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.kv-workspace__examples-label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+  margin-right: 2px;
+}
+.kv-workspace__example {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+  border: 1px solid var(--sc-hairline);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  transition: color var(--sc-d-fast) var(--sc-ease-out), border-color var(--sc-d-fast) var(--sc-ease-out);
+}
+.kv-workspace__example:hover {
+  color: var(--status-sync);
+  border-color: var(--status-sync-border);
+}
+
+/* ---- metadata strip -------------------------------------------------------- */
+.kv-workspace__meta {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--sc-4);
+  padding: var(--sc-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--sc-hairline);
+  background: color-mix(in oklab, var(--sc-ink) 3%, transparent);
+}
+.kv-workspace__meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.kv-workspace__meta-value {
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- status rows ------------------------------------------------------- */
+.kv-workspace__status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sc-3) var(--sc-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}
+.kv-workspace__status-title {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+}
+.kv-workspace__status-body {
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink-soft);
+}
+.kv-workspace__status--error {
+  border-color: var(--status-critical-border);
+  background: var(--status-critical-soft);
+}
+.kv-workspace__status--error .kv-workspace__status-title {
+  color: var(--status-critical);
+}
+.kv-workspace__status--executing {
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-soft);
+}
+.kv-workspace__status--executing .kv-workspace__status-title {
+  color: var(--status-warn);
+}
+
+/* ---- actions ------------------------------------------------------------ */
+.kv-workspace__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-4);
+}
+.kv-workspace__execute {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-sm);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-accent-ink);
+  background: var(--sc-accent);
+  border-radius: var(--radius-sm);
+  padding: var(--sc-3) var(--sc-6);
+  transition: opacity var(--sc-d-fast) var(--sc-ease-out), transform var(--sc-d-fast) var(--sc-ease-out);
+}
+.kv-workspace__execute:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.kv-workspace__execute:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.kv-workspace__execute:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.kv-workspace__execute--delete {
+  background: var(--status-critical);
+  color: var(--status-critical-ink);
+}
+.kv-workspace__hint {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+  border: 1px solid var(--sc-hairline-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+}
+
+@media (max-width: 860px) {
+  .kv-workspace__row--split {
+    grid-template-columns: 1fr;
+  }
+  .kv-workspace__meta {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .kv-workspace__panel {
+    padding: var(--sc-4);
+  }
+  .kv-workspace__meta {
+    grid-template-columns: 1fr 1fr;
+  }
+  .kv-workspace__actions {
+    flex-wrap: wrap;
+  }
+}

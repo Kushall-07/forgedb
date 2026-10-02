@@ -1,0 +1,18 @@
+.cluster-live-summary {
+  display: grid;
+  grid-template-columns: 0.8fr 1.3fr 0.8fr 1fr 1fr 1fr 1.3fr;
+  gap: var(--sc-3);
+  margin-bottom: var(--sc-8);
+}
+
+@media (max-width: 1100px) {
+  .cluster-live-summary {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .cluster-live-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

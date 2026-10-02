@@ -1,0 +1,35 @@
+.system-health {
+  margin-bottom: var(--sc-2);
+}
+
+.system-health__grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--sc-3);
+}
+
+.system-health__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  padding: var(--sc-4);
+}
+
+.system-health__label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+}
+
+@media (max-width: 1100px) {
+  .system-health__grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .system-health__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

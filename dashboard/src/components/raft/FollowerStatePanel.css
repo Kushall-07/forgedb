@@ -1,0 +1,67 @@
+.follower-state {
+  margin-bottom: var(--sc-9);
+}
+
+.follower-state__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sc-4);
+}
+
+.follower-state__card {
+  padding: var(--sc-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-3);
+}
+
+.follower-state__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-3);
+  padding-bottom: var(--sc-3);
+  border-bottom: 1px solid var(--sc-hairline);
+}
+
+.follower-state__node {
+  font-size: var(--sc-t-base);
+  color: var(--sc-ink);
+}
+
+.follower-state__rows {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sc-2) var(--sc-4);
+  margin: 0;
+}
+
+.follower-state__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sc-2);
+  padding-bottom: var(--sc-2);
+  border-bottom: 1px solid var(--sc-hairline);
+}
+
+.follower-state__row dt {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+}
+
+.follower-state__row dd {
+  margin: 0;
+  color: var(--sc-ink);
+}
+
+.follower-state__footer {
+  padding-top: var(--sc-1);
+}
+
+@media (max-width: 760px) {
+  .follower-state__grid {
+    grid-template-columns: 1fr;
+  }
+}

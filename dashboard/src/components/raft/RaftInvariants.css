@@ -1,0 +1,48 @@
+.raft-invariants {
+  margin-bottom: var(--sc-7);
+}
+
+.raft-invariants__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sc-4);
+  padding: var(--sc-5);
+}
+
+.raft-invariants__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  padding: var(--sc-3) var(--sc-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--sc-hairline);
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
+}
+
+.raft-invariants__item--state {
+  justify-content: center;
+  border-color: var(--status-sync-border);
+}
+
+.raft-invariants__label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+}
+
+.raft-invariants__value {
+  font-size: var(--sc-t-base);
+  color: var(--sc-ink);
+}
+
+@media (max-width: 1100px) {
+  .raft-invariants__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .raft-invariants__grid {
+    grid-template-columns: 1fr;
+  }
+}

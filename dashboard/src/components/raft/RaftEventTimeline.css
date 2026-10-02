@@ -1,0 +1,118 @@
+.raft-event-timeline {
+  margin-bottom: var(--sc-9);
+}
+
+.raft-event-timeline__filters {
+  display: flex;
+  gap: var(--sc-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sc-4);
+}
+
+.raft-event-timeline__filter {
+  padding: 6px var(--sc-3);
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+  border: 1px solid var(--sc-hairline-strong);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--sc-d-base) var(--sc-ease-out),
+    color var(--sc-d-base) var(--sc-ease-out);
+}
+.raft-event-timeline__filter:focus-visible {
+  outline: 2px solid var(--sc-accent);
+  outline-offset: 2px;
+}
+.raft-event-timeline__filter--active {
+  color: var(--status-identity);
+  border-color: var(--status-identity-border);
+  background: var(--status-identity-soft);
+}
+
+.raft-event-timeline__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--sc-2) 0;
+}
+
+.raft-event-timeline__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sc-4);
+  padding: var(--sc-3) var(--sc-5);
+  border-bottom: 1px solid var(--sc-hairline);
+}
+.raft-event-timeline__item:last-child {
+  border-bottom: none;
+}
+
+.raft-event-timeline__time {
+  flex: none;
+  width: 4.5rem;
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.raft-event-timeline__type {
+  flex: none;
+  width: 6.5rem;
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  text-align: center;
+  border: 1px solid var(--sc-hairline-strong);
+}
+.raft-event-timeline__type--sync {
+  color: var(--status-sync);
+  border-color: var(--status-sync-border);
+  background: var(--status-sync-soft);
+}
+.raft-event-timeline__type--identity {
+  color: var(--status-identity);
+  border-color: var(--status-identity-border);
+  background: var(--status-identity-soft);
+}
+.raft-event-timeline__type--warn {
+  color: var(--status-warn);
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-soft);
+}
+.raft-event-timeline__type--critical {
+  color: var(--status-critical);
+  border-color: var(--status-critical-border);
+  background: var(--status-critical-soft);
+}
+.raft-event-timeline__type--neutral {
+  color: var(--sc-ink-soft);
+}
+
+.raft-event-timeline__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.raft-event-timeline__title {
+  color: var(--sc-ink);
+  font-size: var(--sc-t-sm);
+}
+
+.raft-event-timeline__description {
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-xs);
+}
+
+.raft-event-timeline__empty {
+  padding: var(--sc-4) var(--sc-5);
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}
+
+@media (max-width: 640px) {
+  .raft-event-timeline__item {
+    flex-wrap: wrap;
+    padding: var(--sc-3) var(--sc-4);
+  }
+}

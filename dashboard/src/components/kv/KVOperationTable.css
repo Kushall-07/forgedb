@@ -1,0 +1,60 @@
+.kv-op-table {
+  margin-bottom: var(--sc-7);
+}
+
+.kv-op-table__wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.kv-op-table__table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: var(--sc-t-sm);
+}
+
+.kv-op-table__table th,
+.kv-op-table__table td {
+  padding: var(--sc-3) var(--sc-4);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.kv-op-table__table thead th {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+  border-bottom: 1px solid var(--sc-hairline-strong);
+}
+
+.kv-op-table__table tbody tr {
+  border-bottom: 1px solid var(--sc-hairline);
+  transition: background-color var(--sc-d-fast) var(--sc-ease-out);
+}
+.kv-op-table__table tbody tr:last-child {
+  border-bottom: none;
+}
+.kv-op-table__table tbody tr:hover {
+  background: color-mix(in oklab, var(--sc-ink) 4%, transparent);
+}
+
+.kv-op-table__table td {
+  color: var(--sc-ink);
+}
+
+.kv-op-table__id {
+  color: var(--sc-ink-soft);
+}
+
+.kv-op-table__op--get {
+  color: var(--status-sync);
+}
+.kv-op-table__op--put {
+  color: var(--status-identity);
+}
+.kv-op-table__op--delete {
+  color: var(--status-critical);
+}

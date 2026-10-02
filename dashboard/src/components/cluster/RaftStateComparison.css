@@ -1,0 +1,54 @@
+.raft-comparison {
+  margin-bottom: var(--sc-9);
+}
+
+.raft-comparison__table-wrap {
+  overflow-x: auto;
+}
+
+.raft-comparison__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--sc-t-sm);
+}
+
+.raft-comparison__table th,
+.raft-comparison__table td {
+  padding: var(--sc-3) var(--sc-4);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.raft-comparison__table thead th {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+  border-bottom: 1px solid var(--sc-hairline-strong);
+}
+
+.raft-comparison__table tbody th {
+  text-align: left;
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+}
+
+.raft-comparison__table tbody tr {
+  border-bottom: 1px solid var(--sc-hairline);
+}
+.raft-comparison__table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.raft-comparison__table td {
+  color: var(--sc-ink);
+}
+
+.raft-comparison__note {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-3);
+  margin: var(--sc-4) 0 0;
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink-soft);
+}
