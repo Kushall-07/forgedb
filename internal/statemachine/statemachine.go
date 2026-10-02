@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Kushall-07/forgedb/internal/logging"
+	"github.com/Kushall-07/forgedb/internal/metrics"
 	"github.com/Kushall-07/forgedb/internal/storage"
 )
 
@@ -105,16 +107,25 @@ func (sm *KVStateMachine) Apply(cmd Command) (Result, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	metrics.StateMachineCommandsTotal.Inc()
+
 	if prev, ok := sm.dedup[cmd.ClientID]; ok {
 		switch {
 		case cmd.RequestID == prev.requestID:
 			if !prev.matches(cmd) {
+				metrics.StateMachineDedupConflictsTotal.Inc()
+				metrics.StateMachineApplySuccessTotal.Inc()
+				logging.Default.Warn(logging.EventStateMachineDedupConflict, "component", "statemachine", "client_id", cmd.ClientID, "request_id", cmd.RequestID)
 				return Result{Err: ErrRequestIDConflict}, nil
 			}
 			res := prev.result
 			res.Replayed = true
+			metrics.StateMachineDedupHitsTotal.Inc()
+			metrics.StateMachineApplySuccessTotal.Inc()
+			logging.Default.Debug(logging.EventStateMachineDedupHit, "component", "statemachine", "client_id", cmd.ClientID, "request_id", cmd.RequestID)
 			return res, nil
 		case cmd.RequestID < prev.requestID:
+			metrics.StateMachineApplySuccessTotal.Inc()
 			return Result{Err: ErrStaleRequest}, nil
 		}
 		// cmd.RequestID > prev.requestID: a genuinely new request from an
@@ -123,8 +134,13 @@ func (sm *KVStateMachine) Apply(cmd Command) (Result, error) {
 
 	res, err := sm.execute(cmd)
 	if err != nil {
+		metrics.StateMachineApplyFailureTotal.Inc()
+		metrics.RecordError("statemachine")
+		logging.Default.Error(logging.EventStateMachineApplyError, "component", "statemachine", "op", cmd.Op.String(), "error", err.Error())
 		return Result{}, err
 	}
+	metrics.StateMachineApplySuccessTotal.Inc()
+	logging.Default.Debug(logging.EventStateMachineApply, "component", "statemachine", "op", cmd.Op.String())
 
 	sm.dedup[cmd.ClientID] = dedupEntry{
 		requestID: cmd.RequestID,

@@ -1,5 +1,7 @@
 package raft
 
+import "github.com/Kushall-07/forgedb/internal/metrics"
+
 // startElectionLocked begins a new election: the node increments its
 // term, transitions to Candidate, votes for itself, and requests votes
 // from every peer concurrently. If the node's own vote is already enough
@@ -29,6 +31,8 @@ func (n *Node) startElectionLocked() {
 	n.role = Candidate
 	n.votesReceived = map[string]bool{n.id: true}
 	n.resetElectionTimerLocked()
+	metrics.RaftElectionsStartedTotal.Inc()
+	logEvent(n.id).Info(eventElectionStarted, "term", n.currentTerm)
 
 	term := n.currentTerm
 	lastIndex := n.log.LastIndex()
@@ -100,6 +104,10 @@ func (n *Node) becomeLeaderLocked() {
 	n.role = Leader
 	n.leaderID = n.id
 	n.votesReceived = nil
+	metrics.RaftElectionsWonTotal.Inc()
+	metrics.RaftLeaderChangesTotal.Inc()
+	logEvent(n.id).Info(eventElectionWon, "term", n.currentTerm)
+	logEvent(n.id).Info(eventLeaderChanged, "term", n.currentTerm, "leader_id", n.id)
 
 	lastIndex := n.log.LastIndex()
 	n.nextIndex = make(map[string]uint64, len(n.peers))
