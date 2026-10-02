@@ -31,6 +31,11 @@ func (n *Node) LastApplied() uint64 {
 // applies committed entries one at a time, in order, and calls
 // MarkApplied immediately after each one succeeds never has any reason to
 // hit either rejection.
+//
+// Every successful call notifies AppliedCh (see notifyAppliedLocked), so a
+// reader waiting for the state machine to catch up to a required index --
+// the apply barrier a linearizable read depends on, see ReadIndex in
+// read.go -- wakes up without polling.
 func (n *Node) MarkApplied(index uint64) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -42,5 +47,28 @@ func (n *Node) MarkApplied(index uint64) error {
 		return fmt.Errorf("raft: MarkApplied(%d): exceeds commitIndex %d", index, n.commitIndex)
 	}
 	n.lastApplied = index
+	n.notifyAppliedLocked()
 	return nil
+}
+
+// notifyAppliedLocked performs a non-blocking send on appliedCh so a
+// listener (see AppliedCh) wakes up to re-check LastApplied. It never
+// blocks and never requires a listener to be present -- LastApplied is
+// always the authoritative source of truth, this is purely a wake-up
+// hint, mirroring notifyCommitLocked in replication.go exactly. n.mu must
+// be held.
+func (n *Node) notifyAppliedLocked() {
+	select {
+	case n.appliedCh <- struct{}{}:
+	default:
+	}
+}
+
+// AppliedCh returns a channel that receives a value every time MarkApplied
+// advances LastApplied. Like CommitCh, it is a wake-up hint, not a queue of
+// applied indexes: a send can be coalesced or missed by a slow reader, so
+// a listener should always re-read LastApplied after waking, not rely on
+// one channel value per MarkApplied call.
+func (n *Node) AppliedCh() <-chan struct{} {
+	return n.appliedCh
 }

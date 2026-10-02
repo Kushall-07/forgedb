@@ -183,6 +183,15 @@ type Node struct {
 	// nothing was listening.
 	commitCh chan struct{}
 
+	// appliedCh mirrors commitCh for lastApplied: it receives a
+	// non-blocking notification every time MarkApplied advances
+	// lastApplied, so a caller establishing a read barrier (see
+	// ReadIndex in read.go and docs/raft/phase8.5-read-consistency.md)
+	// can wait, event-driven, for the state machine to catch up to a
+	// required index instead of polling. Like commitCh, it is never
+	// required reading: LastApplied is always authoritative.
+	appliedCh chan struct{}
+
 	// inflight tracks this node's currently outstanding outbound RPC
 	// goroutines (including any further sends they themselves trigger,
 	// such as a candidate that wins an election immediately
@@ -246,6 +255,7 @@ func NewNode(opts Options) (*Node, error) {
 		rnd:             rnd,
 		persister:       persister,
 		commitCh:        make(chan struct{}, 1),
+		appliedCh:       make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
 	}
 

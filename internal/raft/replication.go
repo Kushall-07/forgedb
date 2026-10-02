@@ -40,10 +40,24 @@ func (n *Node) broadcastAppendEntriesLocked() {
 // by one so the next round retries with one more entry of history, the
 // simplest form of the standard back-off-and-retry conflict recovery. It
 // runs outside n.mu (see trackRPC).
-func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArgs) {
+//
+// sendAppendEntries reports whether this round trip counts as peer
+// acknowledging this node's leadership at term: true if the RPC was
+// delivered, the reply carried no higher term, and this node is still
+// leader at term by the time the reply is processed; false otherwise
+// (delivery failure, a higher-term reply -- which also triggers this
+// node's own step-down below -- or a stale round whose term or leadership
+// no longer matches). This is exactly, and only, the signal ReadIndex
+// needs to confirm a quorum for a linearizable read (see read.go); it is
+// deliberately independent of reply.Success, since a log-matching
+// mismatch (Success=false) still confirms the peer recognizes this node
+// as leader at term, it just also needs more log history replicated.
+// Ordinary heartbeat/replication callers (broadcastAppendEntriesLocked)
+// simply ignore the return value, exactly as before this method had one.
+func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArgs) bool {
 	reply, err := n.transport.SendAppendEntries(peer, args)
 	if err != nil {
-		return // dropped/unreachable; a later heartbeat or retry will try again
+		return false // dropped/unreachable; a later heartbeat or retry will try again
 	}
 
 	n.mu.Lock()
@@ -53,12 +67,12 @@ func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArg
 		// Best-effort, as in sendRequestVote: becomeFollowerLocked
 		// already leaves state untouched on a persistence failure.
 		_ = n.becomeFollowerLocked(reply.Term)
-		return
+		return false
 	}
 	// This reply may be stale: we may no longer be leader, or a newer
 	// term may have started since this RPC was sent.
 	if n.role != Leader || n.currentTerm != term {
-		return
+		return false
 	}
 
 	if reply.Success {
@@ -70,12 +84,13 @@ func (n *Node) sendAppendEntries(peer string, term uint64, args AppendEntriesArg
 			n.nextIndex[peer] = newMatch + 1
 		}
 		n.maybeAdvanceCommitIndexLocked()
-		return
+		return true
 	}
 
 	if n.nextIndex[peer] > 1 {
 		n.nextIndex[peer]--
 	}
+	return true
 }
 
 // maybeAdvanceCommitIndexLocked implements Raft's commit rule: the leader

@@ -31,6 +31,7 @@
 package dbnode
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"path/filepath"
@@ -51,6 +52,21 @@ const raftStateFileName = "raft-state"
 // check the error. Phase 8, like Phase 5, does not implement client
 // redirection to the real leader.
 var ErrNotLeader = raft.ErrNotLeader
+
+// ErrReadUnavailable is returned by ConsistentGet when this Node cannot
+// currently establish the quorum confirmation a linearizable read
+// requires -- a direct re-export of raft.ErrReadBarrierUnavailable, for
+// the same reason ErrNotLeader re-exports raft.ErrNotLeader above. It
+// covers both an isolated leader (on the minority side of a partition)
+// and a leader that loses leadership while the confirmation round is in
+// flight -- see (*raft.Node).ReadIndex and
+// docs/raft/phase8.5-read-consistency.md.
+//
+// This is always distinguishable from a key simply not being present:
+// ConsistentGet returns storage.ErrKeyNotFound, never ErrReadUnavailable
+// or ErrNotLeader, once a read barrier has actually been established --
+// see ConsistentGet's doc comment.
+var ErrReadUnavailable = raft.ErrReadBarrierUnavailable
 
 // registrar is implemented by transports that support pre-registering a
 // handler under a node ID -- in practice, *raft.InMemoryTransport. Open
@@ -229,6 +245,68 @@ func (n *Node) Drain() { n.raft.Drain() }
 // Tick/Drain has settled a round of Raft activity) instead of relying on
 // Run's background goroutine and a polling loop.
 func (n *Node) ApplyAvailable() (applied int, err error) { return n.applier.ApplyAvailable() }
+
+// ConsistentGet performs a linearizable read of key. See
+// docs/raft/phase8.5-read-consistency.md for the full design; in outline,
+// it follows three steps, in order:
+//
+//  1. Establish a read barrier through Raft ((*raft.Node).ReadIndex):
+//     this node must currently be leader, and a majority of the cluster
+//     must freshly confirm that leadership is still current right now,
+//     not merely at some earlier instant. This returns ErrNotLeader (not
+//     leader) or ErrReadUnavailable (leader, but quorum could not be
+//     confirmed -- e.g. a minority partition, or a leadership change
+//     during the confirmation round) without reading anything.
+//  2. Wait for this node's own Applier to apply every entry through that
+//     barrier (waitForApplied): committed is not the same as applied
+//     (see internal/raft's commitIndex/lastApplied distinction), and
+//     storage must never be read ahead of the state machine's own
+//     progress through the log.
+//  3. Only then read key from local storage.
+//
+// ctx governs step 2's wait and must not be nil; context.Background()
+// waits indefinitely (appropriate for a test driving ApplyAvailable
+// manually, since the wait then never actually blocks -- see the package
+// tests), while a production caller would typically pass a
+// request-scoped deadline instead. If ctx is cancelled or times out
+// before the wait completes, ConsistentGet returns a wrapped ctx.Err()
+// without ever reading storage.
+//
+// A successful barrier still distinguishes a missing key
+// (storage.ErrKeyNotFound, returned exactly as Store.Get already defines
+// it) from every failure above -- see ErrReadUnavailable's doc comment.
+// ConsistentGet never serves a read from a follower's local storage; it
+// is leader-only by construction, via step 1.
+func (n *Node) ConsistentGet(ctx context.Context, key []byte) ([]byte, error) {
+	readIndex, err := n.raft.ReadIndex()
+	if err != nil {
+		return nil, err
+	}
+	if err := n.waitForApplied(ctx, readIndex); err != nil {
+		return nil, fmt.Errorf("dbnode: wait for state machine to apply through read index %d: %w", readIndex, err)
+	}
+	return n.store.Get(key)
+}
+
+// waitForApplied blocks until n.raft.LastApplied() >= target, or until ctx
+// is done. It is event-driven rather than a busy-loop: it waits on
+// n.raft.AppliedCh() (notified by every (*raft.Node).MarkApplied call) and
+// re-checks LastApplied each time it wakes, exactly the same
+// wait-then-recheck pattern CommitCh already establishes for commit
+// notifications -- a coalesced or missed notification is never a problem
+// because LastApplied, not the channel, is the authoritative check.
+func (n *Node) waitForApplied(ctx context.Context, target uint64) error {
+	for {
+		if n.raft.LastApplied() >= target {
+			return nil
+		}
+		select {
+		case <-n.raft.AppliedCh():
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
 
 // Run starts this node's Raft node and Applier as background goroutines --
 // see (*raft.Node).Run and (*Applier).Run -- for production use. Tests
