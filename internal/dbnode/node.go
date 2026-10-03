@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Kushall-07/forgedb/internal/logging"
@@ -150,6 +151,18 @@ type Node struct {
 	store   storage.Store
 	sm      *statemachine.KVStateMachine
 	applier *statemachine.Applier
+
+	// closeOnce/closeErr make Close idempotent: raft.Node.Stop and
+	// Applier.Stop already tolerate repeated calls on their own (see
+	// their own doc comments), but storage.Store.Close does not --
+	// closing an already-closed WAL file a second time returns a
+	// spurious "file already closed" error instead of silently
+	// succeeding. A caller that calls Close more than once (e.g. a
+	// defensive second shutdown attempt, or a test) must see the exact
+	// same result every time, not a confusing error that only appears
+	// on repeat calls -- see Close's doc comment.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open constructs a Node from cfg: it opens KV storage at cfg.KVDir
@@ -392,26 +405,32 @@ func (n *Node) Run(tickInterval time.Duration) {
 // This ordering is what prevents a shutdown race between the applier
 // still writing to storage and storage being closed out from under it
 // (see docs/raft/phase8-raft-storage-integration.md's lifecycle section).
-// Close is safe to call even if Run was never called. It does not delete
-// or otherwise touch this node's on-disk directories -- a later Open with
-// the same Config reopens exactly what Close left behind.
+// Close is safe to call even if Run was never called, and safe to call
+// more than once: every call after the first is a no-op that returns
+// the first call's own result, rather than re-closing already-released
+// resources. It does not delete or otherwise touch this node's on-disk
+// directories -- a later Open with the same Config reopens exactly what
+// Close left behind.
 func (n *Node) Close() error {
-	n.raft.Stop()
-	n.raft.Drain()
-	n.applier.Stop()
-	err := n.store.Close()
+	n.closeOnce.Do(func() {
+		n.raft.Stop()
+		n.raft.Drain()
+		n.applier.Stop()
+		n.closeErr = n.store.Close()
 
-	// Only clear the metrics/cluster-diagnostics pointer if this is still
-	// the node it currently points at -- a later Open may already have
-	// made a different Node current (see registerMetricsOnce's doc
-	// comment), and Close must not blind that one's gauges.
-	currentNode.CompareAndSwap(n, nil)
+		// Only clear the metrics/cluster-diagnostics pointer if this is
+		// still the node it currently points at -- a later Open may
+		// already have made a different Node current (see
+		// registerMetricsOnce's doc comment), and Close must not blind
+		// that one's gauges.
+		currentNode.CompareAndSwap(n, nil)
 
-	logEvent := logging.With("node_id", n.id, "component", "dbnode")
-	if err != nil {
-		logEvent.Warn(logging.EventNodeStopped, "error", err.Error())
-	} else {
-		logEvent.Info(logging.EventNodeStopped)
-	}
-	return err
+		logEvent := logging.With("node_id", n.id, "component", "dbnode")
+		if n.closeErr != nil {
+			logEvent.Warn(logging.EventNodeStopped, "error", n.closeErr.Error())
+		} else {
+			logEvent.Info(logging.EventNodeStopped)
+		}
+	})
+	return n.closeErr
 }

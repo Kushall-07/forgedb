@@ -332,6 +332,28 @@ func TestNode_Restart_RecoversKVAndRaftLogFromRealFiles(t *testing.T) {
 	}
 }
 
+// TestNode_Close_Idempotent confirms a second Close call never
+// re-touches already-released resources: before Close's own
+// closeOnce guard, a second call re-closed the underlying WAL file
+// handle and surfaced a spurious "file already closed" error instead
+// of the harmless no-op a repeated shutdown call must be (see Close's
+// doc comment). A single-node, zero-peer cluster is enough here --
+// this test is about Close's own idempotency, not Raft commit
+// behavior.
+func TestNode_Close_Idempotent(t *testing.T) {
+	_, nodes, _ := newCluster(t, 1)
+	n := nodes[0]
+
+	first := n.Close()
+	if first != nil {
+		t.Fatalf("first Close() = %v, want nil", first)
+	}
+	second := n.Close()
+	if second != nil {
+		t.Fatalf("second Close() = %v, want nil (idempotent)", second)
+	}
+}
+
 // --- I. Full cluster restart: all three nodes, logical state converges ----
 
 func TestNode_FullClusterRestart_ConvergesToRecoveredState(t *testing.T) {
