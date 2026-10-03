@@ -126,7 +126,7 @@ func newServer(cfg config.Config) (*server, error) {
 	}
 	node.Run(tickInterval)
 
-	apiSrv := api.NewServer(node, metrics.Default, api.WithPeerHTTPAddrs(cfg.PeerHTTPAddrs()))
+	apiSrv := api.NewServer(node, metrics.Default, cfg.APIToken, api.WithPeerHTTPAddrs(cfg.PeerHTTPAddrs()))
 	httpAddr, err := apiSrv.Start(cfg.HTTP)
 	if err != nil {
 		grpcSrv.Stop()

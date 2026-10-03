@@ -15,6 +15,29 @@ This file is the hands-on operator guide.
 
 - Docker Engine with Compose v2 (`docker compose version`).
 - Nothing else -- the Go toolchain is only needed inside the build stage.
+- A `FORGEDB_API_TOKEN` value -- see [Section 1.1](#11-authentication) below.
+  Every command in this guide that hits a protected endpoint assumes
+  `$FORGEDB_API_TOKEN` is exported in your shell.
+
+### 1.1 Authentication
+
+Every HTTP endpoint except `/health` and `/ready` now requires
+`Authorization: Bearer <token>` (see
+[`docs/deployment/phase14-docker-deployment.md`](../docs/deployment/phase14-docker-deployment.md#21-http-api-authentication)
+for the full design rationale). Before starting the cluster, set a
+token:
+
+```sh
+cp .env.example .env
+# edit .env and replace the placeholder with a real value, e.g.:
+#   openssl rand -hex 32
+export FORGEDB_API_TOKEN=$(grep -oP '(?<=^FORGEDB_API_TOKEN=).*' .env)
+```
+
+`docker compose` reads `.env` automatically from the project root, so
+`docker compose up` picks it up without any further flags; the curl
+examples below need it exported in your own shell too. Never commit
+`.env` -- only `.env.example` (a placeholder) is tracked.
 
 ## 2. Building the image
 
@@ -78,9 +101,9 @@ Example output:
 ## 5. Finding the leader
 
 ```sh
-curl http://localhost:8081/cluster
-curl http://localhost:8082/cluster
-curl http://localhost:8083/cluster
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8081/cluster
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8082/cluster
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8083/cluster
 ```
 
 Each response's `raft.LeaderID` and `raft.Role` show who the cluster
@@ -100,9 +123,9 @@ The client API is `/kv/{key}`: `PUT` (body = value), `GET`, `DELETE`.
 Using plain `curl` against the host-published ports:
 
 ```sh
-curl -X PUT --data-binary "hello world" http://localhost:8081/kv/greeting
-curl http://localhost:8081/kv/greeting
-curl -X DELETE http://localhost:8081/kv/greeting
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" -X PUT --data-binary "hello world" http://localhost:8081/kv/greeting
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8081/kv/greeting
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" -X DELETE http://localhost:8081/kv/greeting
 ```
 
 A request sent to a follower gets back **HTTP 421 Misdirected Request**
@@ -118,11 +141,11 @@ give it every node's address and it finds the leader itself:
 ```sh
 docker run --rm --network forgedb_forgedb-net --entrypoint forge-client \
   forgedb:latest -addrs http://forgedb-1:8080,http://forgedb-2:8080,http://forgedb-3:8080 \
-  put greeting "hello from docker"
+  -token "$FORGEDB_API_TOKEN" put greeting "hello from docker"
 
 docker run --rm --network forgedb_forgedb-net --entrypoint forge-client \
   forgedb:latest -addrs http://forgedb-1:8080,http://forgedb-2:8080,http://forgedb-3:8080 \
-  get greeting
+  -token "$FORGEDB_API_TOKEN" get greeting
 ```
 
 (`--entrypoint forge-client` is required because the image's default
@@ -133,7 +156,7 @@ prefixes the network name -- adjust `forgedb_forgedb-net` if you ran
 ## 7. Checking metrics
 
 ```sh
-curl http://localhost:8081/metrics
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8081/metrics
 ```
 
 Prometheus text-exposition format (Phase 12's hand-rolled registry --
@@ -300,6 +323,15 @@ production security configuration:
   network-level security (e.g. running this on an untrusted network).
 - Do not expose the gRPC or HTTP ports directly to the public internet
   as configured here.
+- The HTTP API requires a static bearer token (`FORGEDB_API_TOKEN`,
+  see [Section 1.1](#11-authentication)) on every endpoint except
+  `/health`/`/ready`. This is a minimal boundary control, not a full
+  authorization system -- there is one shared token for every caller
+  (no per-user identity, scopes, or rotation), and the connection itself
+  is still plaintext HTTP unless you terminate TLS in front of it (e.g.
+  at the Cloudflare tunnel). Treat the token like any other secret:
+  generate it randomly, never commit it, and rotate it (restart every
+  node with a new `FORGEDB_API_TOKEN`) if it may have leaked.
 
 ## Troubleshooting
 
@@ -314,6 +346,8 @@ production security configuration:
 | Invalid peer configuration | Malformed `PEERS` entry, mismatched self address | Same as above: the process refuses to start rather than run misconfigured, and logs exactly which check failed |
 | `context deadline exceeded` between nodes | A peer is slow, overloaded, or network-partitioned | `internal/transport.Options.RPCTimeout` (`RPC_TIMEOUT` env var) controls this bound; a partitioned peer is expected to time out, not hang forever |
 | HTTP endpoint unreachable from the host | Container not yet healthy, or its network was disconnected (see the partition test above) | `docker compose ps`, `docker network inspect forgedb_forgedb-net` |
+| `401 Unauthorized` from `/kv`, `/cluster`, `/metrics`, or `/admin/snapshot` | Missing/wrong `Authorization: Bearer <token>` header, or your shell's `$FORGEDB_API_TOKEN` doesn't match what the containers were started with | Confirm the header is set exactly as `Authorization: Bearer <token>` (not a query parameter); re-check `.env` / the exported value |
+| `docker compose up`/`config` fails with "FORGEDB_API_TOKEN must be set" | `FORGEDB_API_TOKEN` isn't set in your shell or `.env` | See [Section 1.1](#11-authentication) |
 
 ## What Phase 14 proves
 

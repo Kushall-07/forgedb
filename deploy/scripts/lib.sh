@@ -16,11 +16,17 @@ NETWORK="${COMPOSE_PROJECT}_forgedb-net"
 NODES=(forgedb-1 forgedb-2 forgedb-3)
 declare -A HTTP_PORT=( [forgedb-1]=8081 [forgedb-2]=8082 [forgedb-3]=8083 )
 
+# FORGEDB_API_TOKEN must be set in the environment (the same value
+# docker-compose.yml passes into every container -- see .env.example):
+# /cluster is a protected endpoint (see internal/api/auth.go), so these
+# scripts need it to authenticate exactly like any other client.
+: "${FORGEDB_API_TOKEN:?FORGEDB_API_TOKEN must be set in the environment to run these scripts}"
+
 # cluster_json <service> prints that node's /cluster JSON, or nothing if
 # unreachable.
 cluster_json() {
   local svc="$1"
-  curl -s --max-time 3 "http://localhost:${HTTP_PORT[$svc]}/cluster" || true
+  curl -s --max-time 3 -H "Authorization: Bearer ${FORGEDB_API_TOKEN}" "http://localhost:${HTTP_PORT[$svc]}/cluster" || true
 }
 
 # role_of <service> prints that node's current Raft role (Leader/

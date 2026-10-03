@@ -18,6 +18,18 @@
 x-peers: &peers
   PEERS: "node-1=forgedb-1:9090|forgedb-1:8080,node-2=forgedb-2:9090|forgedb-2:8080,node-3=forgedb-3:9090|forgedb-3:8080"
 
+# FORGEDB_API_TOKEN is the static bearer token every protected HTTP
+# endpoint requires (see internal/api/auth.go / internal/config's
+# FORGEDB_API_TOKEN doc comment). It is never given a default here --
+# ${VAR:?msg} makes `docker compose up`/`docker compose config` fail
+# immediately with msg if FORGEDB_API_TOKEN is not set in the shell
+# environment (or a local, untracked .env file -- see .env.example),
+# the same "fail fast rather than run unauthenticated" rule
+# config.Config.Validate() enforces inside the Go process itself. Do not
+# put a real token directly in this file.
+x-api-token: &api_token
+  FORGEDB_API_TOKEN: ${FORGEDB_API_TOKEN:?FORGEDB_API_TOKEN must be set -- see .env.example}
+
 services:
   forgedb-1:
     build: .
@@ -25,7 +37,7 @@ services:
     container_name: forgedb-1
     hostname: forgedb-1
     environment:
-      <<: *peers
+      <<: [*peers, *api_token]
       NODE_ID: node-1
       HTTP_ADDR: 0.0.0.0:8080
       GRPC_ADDR: 0.0.0.0:9090
@@ -46,7 +58,7 @@ services:
     container_name: forgedb-2
     hostname: forgedb-2
     environment:
-      <<: *peers
+      <<: [*peers, *api_token]
       NODE_ID: node-2
       HTTP_ADDR: 0.0.0.0:8080
       GRPC_ADDR: 0.0.0.0:9090
@@ -67,7 +79,7 @@ services:
     container_name: forgedb-3
     hostname: forgedb-3
     environment:
-      <<: *peers
+      <<: [*peers, *api_token]
       NODE_ID: node-3
       HTTP_ADDR: 0.0.0.0:8080
       GRPC_ADDR: 0.0.0.0:9090

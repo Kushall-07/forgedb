@@ -57,10 +57,11 @@ func TestParsePeers_InvalidEntry(t *testing.T) {
 
 func validConfig() Config {
 	return Config{
-		NodeID:  "node-1",
-		HTTP:    ":8081",
-		GRPC:    ":9091",
-		DataDir: "data",
+		NodeID:   "node-1",
+		HTTP:     ":8081",
+		GRPC:     ":9091",
+		DataDir:  "data",
+		APIToken: "test-token",
 		Peers: []Node{
 			{ID: "node-1", GRPC: ":9091", HTTP: ":8081"},
 			{ID: "node-2", GRPC: "forgedb-2:9092", HTTP: "forgedb-2:8082"},
@@ -115,6 +116,14 @@ func TestConfig_Validate_EmptyDataDir(t *testing.T) {
 	}
 }
 
+func TestConfig_Validate_MissingAPIToken(t *testing.T) {
+	cfg := validConfig()
+	cfg.APIToken = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want error when APIToken is empty -- the API must never start unauthenticated")
+	}
+}
+
 func TestConfig_Validate_DuplicatePeerID(t *testing.T) {
 	cfg := validConfig()
 	cfg.Peers = append(cfg.Peers, Node{ID: "node-2", GRPC: "other:9999"})
@@ -154,10 +163,11 @@ func TestConfig_Validate_SelfAddressMismatch(t *testing.T) {
 // check before the fix.
 func TestConfig_Validate_WildcardBindWithHostnameAdvertise(t *testing.T) {
 	cfg := Config{
-		NodeID:  "node-1",
-		HTTP:    "0.0.0.0:8080",
-		GRPC:    "0.0.0.0:9090",
-		DataDir: "/data",
+		NodeID:   "node-1",
+		HTTP:     "0.0.0.0:8080",
+		GRPC:     "0.0.0.0:9090",
+		DataDir:  "/data",
+		APIToken: "test-token",
 		Peers: []Node{
 			{ID: "node-1", GRPC: "forgedb-1:9090", HTTP: "forgedb-1:8080"},
 			{ID: "node-2", GRPC: "forgedb-2:9090", HTTP: "forgedb-2:8080"},
@@ -170,10 +180,11 @@ func TestConfig_Validate_WildcardBindWithHostnameAdvertise(t *testing.T) {
 
 func TestConfig_Validate_WildcardBindWrongAdvertisedPort(t *testing.T) {
 	cfg := Config{
-		NodeID:  "node-1",
-		HTTP:    "0.0.0.0:8080",
-		GRPC:    "0.0.0.0:9090",
-		DataDir: "/data",
+		NodeID:   "node-1",
+		HTTP:     "0.0.0.0:8080",
+		GRPC:     "0.0.0.0:9090",
+		DataDir:  "/data",
+		APIToken: "test-token",
 		Peers: []Node{
 			{ID: "node-1", GRPC: "forgedb-1:9999", HTTP: "forgedb-1:8080"}, // wrong port
 		},
@@ -236,6 +247,7 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv(EnvMetricsEnabled, "")
 	t.Setenv(EnvRPCTimeout, "")
 	t.Setenv(EnvTickInterval, "")
+	t.Setenv(EnvAPIToken, "test-token")
 
 	cfg, err := Load()
 	if err != nil {
@@ -259,6 +271,7 @@ func TestLoad_ParsesPeersAndDurations(t *testing.T) {
 	t.Setenv(EnvPeers, "node-1=:9091|:8081,node-2=forgedb-2:9092|forgedb-2:8082")
 	t.Setenv(EnvRPCTimeout, "3s")
 	t.Setenv(EnvTickInterval, "150ms")
+	t.Setenv(EnvAPIToken, "test-token")
 
 	cfg, err := Load()
 	if err != nil {
@@ -280,6 +293,15 @@ func TestLoad_InvalidPeersFailsFast(t *testing.T) {
 	t.Setenv(EnvPeers, "garbage-no-equals-sign")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want error for malformed PEERS")
+	}
+}
+
+func TestLoad_RequiresAPIToken(t *testing.T) {
+	t.Setenv(EnvNodeID, "node-1")
+	t.Setenv(EnvPeers, "")
+	t.Setenv(EnvAPIToken, "")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want error when FORGEDB_API_TOKEN is unset")
 	}
 }
 

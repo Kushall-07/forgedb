@@ -115,6 +115,9 @@ func newSingleNodeRunning(t *testing.T) *dbnode.Node {
 	return n
 }
 
+// doKV sends an authenticated request (using srv's own configured
+// apiToken -- see auth_test.go for the dedicated unauthenticated-request
+// cases) and returns the recorded response.
 func doKV(srv *Server, method, path string, body []byte) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
 	var reader io.Reader
@@ -122,13 +125,14 @@ func doKV(srv *Server, method, path string, body []byte) *httptest.ResponseRecor
 		reader = bytes.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Authorization", "Bearer "+srv.apiToken)
 	srv.httpSrv.Handler.ServeHTTP(rr, req)
 	return rr
 }
 
 func TestHandleKV_PutGetDelete_EndToEnd(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	if rr := doKV(srv, http.MethodPut, "/kv/foo", []byte("bar")); rr.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, body = %s", rr.Code, rr.Body.String())
@@ -154,7 +158,7 @@ func TestHandleKV_PutGetDelete_EndToEnd(t *testing.T) {
 
 func TestHandleKV_Get_MissingKeyIsNotFound(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	rr := doKV(srv, http.MethodGet, "/kv/never-written", nil)
 	if rr.Code != http.StatusNotFound {
@@ -164,7 +168,7 @@ func TestHandleKV_Get_MissingKeyIsNotFound(t *testing.T) {
 
 func TestHandleKV_MissingKeySegment(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	rr := doKV(srv, http.MethodPut, "/kv/", []byte("x"))
 	if rr.Code != http.StatusBadRequest {
@@ -174,7 +178,7 @@ func TestHandleKV_MissingKeySegment(t *testing.T) {
 
 func TestHandleKV_MethodNotAllowed(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	rr := doKV(srv, http.MethodPatch, "/kv/foo", nil)
 	if rr.Code != http.StatusMethodNotAllowed {
@@ -184,7 +188,7 @@ func TestHandleKV_MethodNotAllowed(t *testing.T) {
 
 func TestHandleKV_Put_RejectsOversizedBody(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	oversized := bytes.Repeat([]byte("x"), maxValueBytes+1)
 	rr := doKV(srv, http.MethodPut, "/kv/big", oversized)
@@ -196,7 +200,7 @@ func TestHandleKV_Put_RejectsOversizedBody(t *testing.T) {
 func TestHandleKV_NotLeader_ReturnsLeaderHint(t *testing.T) {
 	leader, follower := newRunningCluster(t)
 
-	srv := NewServer(follower, metrics.NewRegistry(), WithPeerHTTPAddrs(map[string]string{
+	srv := NewServer(follower, metrics.NewRegistry(), testAPIToken, WithPeerHTTPAddrs(map[string]string{
 		leader.ID(): "forgedb-1:8081",
 	}))
 
@@ -221,7 +225,7 @@ func TestHandleKV_NotLeader_ReturnsLeaderHint(t *testing.T) {
 
 func TestHandleKV_NotLeader_GetAlsoRedirects(t *testing.T) {
 	_, follower := newRunningCluster(t)
-	srv := NewServer(follower, metrics.NewRegistry())
+	srv := NewServer(follower, metrics.NewRegistry(), testAPIToken)
 
 	rr := doKV(srv, http.MethodGet, "/kv/foo", nil)
 	if rr.Code != http.StatusMisdirectedRequest {
@@ -231,7 +235,7 @@ func TestHandleKV_NotLeader_GetAlsoRedirects(t *testing.T) {
 
 func TestHandleAdminSnapshot_CreatesSnapshot(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	if rr := doKV(srv, http.MethodPut, "/kv/a", []byte("1")); rr.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d", rr.Code)
@@ -274,8 +278,8 @@ func TestHandleAdminSnapshot_CreatesSnapshot(t *testing.T) {
 // what a failover can produce once each node's counter restarts at zero.
 func TestClientID_UniquePerNode_PreventsCrossNodeDedupCollision(t *testing.T) {
 	leader, follower := newRunningCluster(t)
-	leaderSrv := NewServer(leader, metrics.NewRegistry())
-	followerSrv := NewServer(follower, metrics.NewRegistry())
+	leaderSrv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
+	followerSrv := NewServer(follower, metrics.NewRegistry(), testAPIToken)
 
 	if leaderSrv.clientID == followerSrv.clientID {
 		t.Fatalf("two different nodes' API servers produced the same clientID %q -- the exact collision this test guards against", leaderSrv.clientID)
@@ -309,7 +313,7 @@ func TestClientID_UniquePerNode_PreventsCrossNodeDedupCollision(t *testing.T) {
 
 func TestHandleAdminSnapshot_RejectsNonPost(t *testing.T) {
 	leader, _ := newRunningCluster(t)
-	srv := NewServer(leader, metrics.NewRegistry())
+	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
 	rr := doKV(srv, http.MethodGet, "/admin/snapshot", nil)
 	if rr.Code != http.StatusMethodNotAllowed {
@@ -368,7 +372,7 @@ func TestHandleAdminSnapshot_RejectsNonPost(t *testing.T) {
 // storage instead of being silently resolved as stale.
 func TestKV_RestartDoesNotCollideRequestIDWithPriorHistory(t *testing.T) {
 	node := newSingleNodeRunning(t)
-	srv1 := NewServer(node, metrics.NewRegistry())
+	srv1 := NewServer(node, metrics.NewRegistry(), testAPIToken)
 
 	for i := uint64(1); i <= 20; i++ {
 		idx, _, err := node.Propose(statemachine.NewPutCommand(srv1.clientID, i, []byte("warmup"), []byte("x")))
@@ -380,7 +384,7 @@ func TestKV_RestartDoesNotCollideRequestIDWithPriorHistory(t *testing.T) {
 		}
 	}
 
-	srv2 := NewServer(node, metrics.NewRegistry())
+	srv2 := NewServer(node, metrics.NewRegistry(), testAPIToken)
 	if srv2.clientID != srv1.clientID {
 		t.Fatalf("clientID changed across the simulated restart: %q vs %q -- this test no longer reproduces the real scenario", srv1.clientID, srv2.clientID)
 	}
@@ -402,7 +406,7 @@ func TestKV_RestartDoesNotCollideRequestIDWithPriorHistory(t *testing.T) {
 // reflects both, and that a DELETE removes exactly the deleted key.
 func TestHandleKV_SingleNodeCluster_MultipleKeysRemainReadable(t *testing.T) {
 	node := newSingleNodeRunning(t)
-	srv := NewServer(node, metrics.NewRegistry())
+	srv := NewServer(node, metrics.NewRegistry(), testAPIToken)
 
 	if rr := doKV(srv, http.MethodPut, "/kv/test:dashboard", []byte("hello-forgedb")); rr.Code != http.StatusOK {
 		t.Fatalf("PUT test:dashboard status = %d, body = %s", rr.Code, rr.Body.String())

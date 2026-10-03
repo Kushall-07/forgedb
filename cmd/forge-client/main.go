@@ -8,13 +8,19 @@
 //
 // Usage:
 //
-//	forge-client -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083 put <key> <value>
-//	forge-client -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083 get <key>
-//	forge-client -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083 delete <key>
+//	forge-client -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083 -token <token> put <key> <value>
+//	forge-client -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083 -token <token> get <key>
+//	forge-client -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083 -token <token> delete <key>
+//
+// -token (or FORGE_CLIENT_TOKEN) must match the server's FORGEDB_API_TOKEN.
 //
 // -addrs lists every node's client-facing HTTP address the operator
 // knows of (in no particular order); forge-client does not need to be
-// told which one is the leader. A request sent to a follower gets back a
+// told which one is the leader. Since Phase E, /kv is authenticated
+// (see internal/api/auth.go): forge-client requires a bearer token via
+// -token or FORGE_CLIENT_TOKEN and sends it as "Authorization: Bearer
+// <token>" on every request; it is never logged or printed. A request sent
+// to a follower gets back a
 // 421 Misdirected Request with a JSON {"error":"not_leader","leader_id":
 // ...,"leader_http":...} body (see internal/api/kv.go); when leader_http
 // is present, forge-client retries there directly, and otherwise falls
@@ -49,14 +55,23 @@ type notLeaderBody struct {
 
 func main() {
 	addrsFlag := ""
+	tokenFlag := ""
 	args := os.Args[1:]
 	args = extractFlag(args, "-addrs", &addrsFlag)
+	args = extractFlag(args, "-token", &tokenFlag)
 
 	if addrsFlag == "" {
 		addrsFlag = os.Getenv("FORGE_CLIENT_ADDRS")
 	}
 	if addrsFlag == "" {
 		fmt.Fprintln(os.Stderr, "forge-client: -addrs (or FORGE_CLIENT_ADDRS) is required, e.g. -addrs http://localhost:8081,http://localhost:8082,http://localhost:8083")
+		os.Exit(2)
+	}
+	if tokenFlag == "" {
+		tokenFlag = os.Getenv("FORGE_CLIENT_TOKEN")
+	}
+	if tokenFlag == "" {
+		fmt.Fprintln(os.Stderr, "forge-client: -token (or FORGE_CLIENT_TOKEN) is required -- /kv requires the same bearer token the server was started with (FORGEDB_API_TOKEN)")
 		os.Exit(2)
 	}
 	addrs := splitNonEmpty(addrsFlag, ",")
@@ -84,11 +99,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: forge-client ... put <key> <value>")
 			os.Exit(2)
 		}
-		status, result, err = doRequest(client, addrs, http.MethodPut, key, []byte(args[2]))
+		status, result, err = doRequest(client, addrs, tokenFlag, http.MethodPut, key, []byte(args[2]))
 	case "get":
-		status, result, err = doRequest(client, addrs, http.MethodGet, key, nil)
+		status, result, err = doRequest(client, addrs, tokenFlag, http.MethodGet, key, nil)
 	case "delete":
-		status, result, err = doRequest(client, addrs, http.MethodDelete, key, nil)
+		status, result, err = doRequest(client, addrs, tokenFlag, http.MethodDelete, key, nil)
 	default:
 		fmt.Fprintf(os.Stderr, "forge-client: unknown command %q (want put|get|delete)\n", cmd)
 		os.Exit(2)
@@ -117,7 +132,7 @@ func main() {
 // hint, simply trying the next configured address) up to maxAttempts
 // times total. It never requires the caller to know which node is
 // currently leader.
-func doRequest(client *http.Client, addrs []string, method, key string, body []byte) (int, []byte, error) {
+func doRequest(client *http.Client, addrs []string, token, method, key string, body []byte) (int, []byte, error) {
 	if len(addrs) == 0 {
 		return 0, nil, errors.New("no addresses to try")
 	}
@@ -151,6 +166,7 @@ func doRequest(client *http.Client, addrs []string, method, key string, body []b
 		if err != nil {
 			return 0, nil, fmt.Errorf("build request: %w", err)
 		}
+		req.Header.Set("Authorization", "Bearer "+token)
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("%s: %w", next, err)

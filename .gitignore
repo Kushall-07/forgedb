@@ -21,3 +21,6 @@ Thumbs.db
 # Dashboard build artifacts
 /dashboard/dist/
 /dashboard/node_modules/
+
+# Local secrets -- never commit a real FORGEDB_API_TOKEN (see .env.example)
+.env

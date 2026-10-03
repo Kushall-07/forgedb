@@ -15,6 +15,17 @@ type Config struct {
 	GRPC    string
 	DataDir string
 
+	// APIToken is the static bearer token internal/api's HTTP middleware
+	// requires on every request to a protected endpoint (every route
+	// except /health and /ready -- see internal/api/auth.go). Load reads
+	// it from the FORGEDB_API_TOKEN environment variable and never
+	// defaults it: Validate fails fast when it is empty, so a node can
+	// never start serving its client-facing HTTP API without
+	// authentication configured. It is loaded once here, at startup, and
+	// passed into api.NewServer -- nothing in internal/api re-reads the
+	// environment per request.
+	APIToken string
+
 	// Peers is this cluster's full, static node roster -- every node,
 	// including this one (see Validate's self-coherence check) -- keyed
 	// by ID. Phase 14 uses only static membership: there is no

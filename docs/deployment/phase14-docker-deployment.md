@@ -176,6 +176,7 @@ A node's full configuration comes from environment variables (see
 | `METRICS_ENABLED` | `true` | Only affects the pre-Phase-14 demo path |
 | `RPC_TIMEOUT` | *(transport default, 2s)* | Per-RPC gRPC deadline |
 | `TICK_INTERVAL` | *(100ms)* | Real-time interval between logical Raft ticks |
+| `FORGEDB_API_TOKEN` | *(required)* | Static bearer token for the client-facing HTTP API -- see [Section 2.1](#21-http-api-authentication) |
 
 `PEERS` is a comma-separated list of `id=grpcAddr` or
 `id=grpcAddr|httpAddr` entries, naming **every** node in the cluster,
@@ -192,6 +193,52 @@ current node's own entry (Raft's `Peers` must never include the node
 itself); `PeerHTTPAddrs()` keeps every entry, including self, for the
 not-leader redirect hint (see [Section 7](#7-leader-redirection)).
 
+### 2.1 HTTP API authentication
+
+Phase 14's `internal/api` was unauthenticated by design -- a reasonable
+posture while the only way to reach it was a private Docker network.
+That stopped being true once this deployment became reachable through
+a public Cloudflare Quick Tunnel: an unauthenticated `/kv` write path
+(and `/admin/snapshot`, and `/cluster`/`/metrics`'s information
+disclosure) on the open internet is not acceptable, so Phase E
+(`internal/api/auth.go`) adds one reusable authentication middleware in
+front of every route except two:
+
+| Endpoint | Auth required? | Why |
+|---|---|---|
+| `GET /health` | No | Liveness probe; infrastructure health checks have no way to carry a token |
+| `GET /ready` | No | Readiness probe; same reasoning as `/health` |
+| `GET /metrics` | **Yes** | Exposes internal counters/histograms |
+| `GET /cluster` | **Yes** | Exposes Raft term/role/leader and storage stats |
+| `GET/PUT/DELETE /kv/{key}` | **Yes** | The client-facing read/write surface itself |
+| `POST /admin/snapshot` | **Yes** | Operator-only trigger |
+
+**Request format** -- exactly one scheme is accepted, the standard
+RFC 6750 bearer form:
+
+```
+Authorization: Bearer <FORGEDB_API_TOKEN>
+```
+
+A token passed as a query parameter (`?token=...`) or a cookie is never
+consulted. Missing, malformed, or wrong credentials all return `401
+Unauthorized` without ever invoking the underlying handler. The
+configured token is compared with `crypto/subtle.ConstantTimeCompare`
+and never appears in a log line, a metric label, or a response body.
+
+**Configuration** -- `FORGEDB_API_TOKEN` has no default:
+`config.Config.Validate()` fails the process at startup, before any
+listener opens, if it is unset or empty -- the same "fail fast rather
+than run misconfigured" rule every other required setting already
+follows (see [Validation](#validation) below). Generate a strong random
+value for real use, e.g. `openssl rand -hex 32`; never commit it (see
+`.env.example` and `docker-compose.yml`'s `FORGEDB_API_TOKEN` entry).
+`forge-client` (`cmd/forge-client`) takes the same value via `-token` or
+`FORGE_CLIENT_TOKEN`.
+
+CORS is explicitly out of scope for this change and will be addressed
+separately.
+
 ### Validation
 
 `Config.Validate()` runs before anything else starts, and a failure
@@ -199,6 +246,7 @@ exits the process immediately (never a partially-configured node):
 
 - `NodeID`, `HTTP`, `GRPC`, `DataDir` all non-empty; `HTTP`/`GRPC` parse
   as valid `host:port`.
+- `FORGEDB_API_TOKEN` is non-empty (see [Section 2.1](#21-http-api-authentication)).
 - No two peer entries share an ID; no two distinct peer IDs share a gRPC
   address.
 - **Self-address coherence, with a wildcard-bind exception.** If `PEERS`

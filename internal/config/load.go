@@ -25,6 +25,10 @@ const (
 	EnvMetricsAddr    = "METRICS_ADDR"
 	EnvRPCTimeout     = "RPC_TIMEOUT"
 	EnvTickInterval   = "TICK_INTERVAL"
+
+	// EnvAPIToken names the environment variable Load reads
+	// Config.APIToken from. It has no default -- see Validate.
+	EnvAPIToken = "FORGEDB_API_TOKEN"
 )
 
 // Load builds a Config from environment variables and validates it (see
@@ -45,6 +49,12 @@ const (
 //	                demo, which listens on its own ephemeral address)
 //	RPC_TIMEOUT     default "" (internal/transport.DefaultRPCTimeout)
 //	TICK_INTERVAL   default "" (DefaultTickInterval)
+//	FORGEDB_API_TOKEN  *(required, no default)* -- the bearer token
+//	                internal/api's auth middleware requires on every
+//	                protected request (see Config.APIToken). Validate
+//	                fails fast when this is unset or empty, rather than
+//	                starting a client-facing HTTP API with no
+//	                authentication.
 //
 // PEERS lists the cluster's full static roster (every node, including
 // this one -- see Validate) as comma-separated "id=grpcAddr" or
@@ -64,6 +74,7 @@ func Load() (Config, error) {
 		DataDir:     getenvDefault(EnvDataDir, "data"),
 		LogLevel:    getenvDefault(EnvLogLevel, "info"),
 		MetricsAddr: os.Getenv(EnvMetricsAddr),
+		APIToken:    os.Getenv(EnvAPIToken),
 	}
 
 	peers, err := ParsePeers(os.Getenv(EnvPeers))
@@ -169,9 +180,17 @@ func ParsePeers(raw string) ([]Node, error) {
 //     address it -- see PeerIDs/PeerGRPCAddrs, which exclude the self
 //     entry so Raft and the gRPC transport never attempt to treat this
 //     node as its own peer.
+//   - APIToken is non-empty, so internal/api's client-facing HTTP
+//     surface is never started without authentication configured (see
+//     Config.APIToken's doc comment) -- a deployment reachable over a
+//     public tunnel or the open internet must never silently fall back
+//     to an unauthenticated API.
 func (c Config) Validate() error {
 	if c.NodeID == "" {
 		return errors.New("config: NodeID must not be empty")
+	}
+	if c.APIToken == "" {
+		return fmt.Errorf("config: %s must be set -- refusing to start the HTTP API without authentication configured", EnvAPIToken)
 	}
 	if err := validateAddr("HTTP", c.HTTP); err != nil {
 		return err

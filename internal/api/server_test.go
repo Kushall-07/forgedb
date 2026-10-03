@@ -14,6 +14,16 @@ import (
 	"github.com/Kushall-07/forgedb/internal/statemachine"
 )
 
+// testAPIToken is the fixed bearer token every test in this package
+// configures its Server(s) with (see NewServer's apiToken parameter and
+// auth.go). Shared across server_test.go and kv_test.go.
+const testAPIToken = "test-token"
+
+func withAuth(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	return req
+}
+
 // newTestNode opens a 2-node dbnode.Node cluster and elects the first
 // node leader, returning it for the Server under test. A genuine
 // zero-peer single-node cluster is deliberately avoided here: this
@@ -71,7 +81,7 @@ func newTestNode(t *testing.T) *dbnode.Node {
 
 func TestHandleHealth_AlwaysOK(t *testing.T) {
 	n := newTestNode(t)
-	srv := NewServer(n, metrics.NewRegistry())
+	srv := NewServer(n, metrics.NewRegistry(), testAPIToken)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -91,7 +101,7 @@ func TestHandleHealth_AlwaysOK(t *testing.T) {
 
 func TestHandleReady_OKWhenStorageReachable(t *testing.T) {
 	n := newTestNode(t)
-	srv := NewServer(n, metrics.NewRegistry())
+	srv := NewServer(n, metrics.NewRegistry(), testAPIToken)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
@@ -112,9 +122,9 @@ func TestHandleCluster_ReportsLeaderAndTerm(t *testing.T) {
 		t.Fatalf("ApplyAvailable: %v", err)
 	}
 
-	srv := NewServer(n, metrics.NewRegistry())
+	srv := NewServer(n, metrics.NewRegistry(), testAPIToken)
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/cluster", nil)
+	req := withAuth(httptest.NewRequest(http.MethodGet, "/cluster", nil))
 	srv.httpSrv.Handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
@@ -141,9 +151,9 @@ func TestHandleMetrics_RendersRegisteredMetrics(t *testing.T) {
 	c := reg.NewCounter("forgedb_test_marker_total", "a marker metric for this test")
 	c.Inc()
 
-	srv := NewServer(n, reg)
+	srv := NewServer(n, reg, testAPIToken)
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := withAuth(httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	srv.httpSrv.Handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
@@ -159,12 +169,12 @@ func TestHandleMetrics_RendersRegisteredMetrics(t *testing.T) {
 
 func TestEndpoints_RejectNonGET(t *testing.T) {
 	n := newTestNode(t)
-	srv := NewServer(n, metrics.NewRegistry())
+	srv := NewServer(n, metrics.NewRegistry(), testAPIToken)
 
 	for _, route := range []string{"/health", "/ready", "/metrics", "/cluster"} {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 			rr := httptest.NewRecorder()
-			req := httptest.NewRequest(method, route, nil)
+			req := withAuth(httptest.NewRequest(method, route, nil))
 			srv.httpSrv.Handler.ServeHTTP(rr, req)
 			if rr.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s %s: status = %d, want 405", method, route, rr.Code)
@@ -177,11 +187,11 @@ func TestEndpoints_NeverMutateNodeState(t *testing.T) {
 	n := newTestNode(t)
 	before := n.Status()
 
-	srv := NewServer(n, metrics.NewRegistry())
+	srv := NewServer(n, metrics.NewRegistry(), testAPIToken)
 	for i := 0; i < 5; i++ {
 		for _, route := range []string{"/health", "/ready", "/metrics", "/cluster"} {
 			rr := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, route, nil)
+			req := withAuth(httptest.NewRequest(http.MethodGet, route, nil))
 			srv.httpSrv.Handler.ServeHTTP(rr, req)
 		}
 	}
@@ -195,7 +205,7 @@ func TestEndpoints_NeverMutateNodeState(t *testing.T) {
 func TestInstrument_RecordsAPIMetrics(t *testing.T) {
 	n := newTestNode(t)
 	reg := metrics.NewRegistry()
-	srv := NewServer(n, reg)
+	srv := NewServer(n, reg, testAPIToken)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

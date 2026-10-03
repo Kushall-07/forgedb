@@ -8,7 +8,11 @@
 // (PUT/GET/DELETE), built directly on internal/dbnode's existing
 // Propose/ConsistentGet, plus an operator-only /admin/snapshot trigger.
 // Nothing in kv.go introduces new consensus, replication, or storage
-// logic -- see that file's doc comment.
+// logic -- see that file's doc comment. Phase E (see auth.go) adds a
+// single static-bearer-token authentication middleware in front of
+// every route except /health and /ready, since a real deployment of
+// this package may now be reachable over a public tunnel rather than
+// only a private network.
 package api
 
 import (
@@ -68,6 +72,12 @@ type Server struct {
 	// cross-node collision at failover.
 	clientID string
 	reqSeq   atomic.Uint64
+
+	// apiToken is the static bearer token authMiddleware (see auth.go)
+	// requires on every protected route. It is set once, in NewServer,
+	// from the apiToken parameter -- never re-read from the environment
+	// per request -- and is never logged or exposed in any response.
+	apiToken string
 }
 
 // Option configures optional Server behavior. See WithPeerHTTPAddrs.
@@ -84,22 +94,41 @@ func WithPeerHTTPAddrs(m map[string]string) Option {
 
 // NewServer returns a Server exposing node's diagnostic state through
 // reg (typically metrics.Default), plus the /kv client API and
-// /admin/snapshot operator trigger. It does not start listening -- see
-// Start.
-func NewServer(node *dbnode.Node, reg *metrics.Registry, opts ...Option) *Server {
-	s := &Server{node: node, registry: reg, clientID: kvClientIDPrefix + node.ID()}
+// /admin/snapshot operator trigger. apiToken is the static bearer token
+// every protected route requires (see auth.go); it is normally
+// config.Config.APIToken, loaded once at startup -- callers must not
+// pass an empty token in production (config.Load's Validate already
+// fails fast on that before a Server is ever constructed). It does not
+// start listening -- see Start.
+//
+// Route table (see auth.go for the public/protected split rationale):
+//
+//	GET  /health          public    -- liveness probe
+//	GET  /ready            public    -- readiness probe
+//	GET  /metrics          protected
+//	GET  /cluster          protected
+//	GET/PUT/DELETE /kv/{key} protected
+//	POST /admin/snapshot   protected
+func NewServer(node *dbnode.Node, reg *metrics.Registry, apiToken string, opts ...Option) *Server {
+	s := &Server{node: node, registry: reg, clientID: kvClientIDPrefix + node.ID(), apiToken: apiToken}
 	s.reqSeq.Store(uint64(time.Now().UnixNano()))
 	for _, opt := range opts {
 		opt(s)
 	}
 
 	mux := http.NewServeMux()
+	// /health and /ready are deliberately never wrapped in authMiddleware
+	// -- see auth.go's doc comment for why.
 	mux.Handle("/health", s.instrument("/health", readOnly(s.handleHealth)))
 	mux.Handle("/ready", s.instrument("/ready", readOnly(s.handleReady)))
-	mux.Handle("/metrics", s.instrument("/metrics", readOnly(s.handleMetrics)))
-	mux.Handle("/cluster", s.instrument("/cluster", readOnly(s.handleCluster)))
-	mux.Handle("/kv/", s.instrument("/kv", s.handleKV))
-	mux.Handle("/admin/snapshot", s.instrument("/admin/snapshot", s.handleAdminSnapshot))
+	// Every other route requires authentication. authMiddleware wraps
+	// instrument (never the reverse), so a failed auth check returns 401
+	// before instrument's logging/metrics recording, and well before the
+	// underlying handler, ever run.
+	mux.Handle("/metrics", authMiddleware(s.apiToken, s.instrument("/metrics", readOnly(s.handleMetrics))))
+	mux.Handle("/cluster", authMiddleware(s.apiToken, s.instrument("/cluster", readOnly(s.handleCluster))))
+	mux.Handle("/kv/", authMiddleware(s.apiToken, s.instrument("/kv", s.handleKV)))
+	mux.Handle("/admin/snapshot", authMiddleware(s.apiToken, s.instrument("/admin/snapshot", s.handleAdminSnapshot)))
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s
