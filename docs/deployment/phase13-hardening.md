@@ -184,7 +184,8 @@ itself is deliberately not handled in Caddy -- see `internal/api/cors.go`
 - **Token rotation / scoped credentials.** `FORGEDB_API_TOKEN` remains
   one shared bearer secret for every caller.
 - **A production-grade public entrypoint in place of the Cloudflare
-  Quick Tunnel.** See Limitations below.
+  Quick Tunnel.** See Limitations below; addressed in
+  [`phase16-public-https.md`](phase16-public-https.md).
 - **Dynamic cluster membership, multi-host topology, automatic
   snapshot policy.** Unchanged from Phase 14/15 -- out of scope here.
 
@@ -195,7 +196,9 @@ itself is deliberately not handled in Caddy -- see `internal/api/cors.go`
   grade public endpoint. It must never be hardcoded into tracked
   configuration (see `FORGEDB_CORS_ORIGINS`'s own warning in
   `.env.example`); it is set only in a local, untracked `.env` or the
-  shell environment.
+  shell environment. See
+  [`phase16-public-https.md`](phase16-public-https.md) for replacing it
+  with a stable, Caddy-terminated HTTPS hostname.
 - **gRPC is plaintext inside the trusted Docker network.** Node-to-node
   replication traffic is unencrypted; this is acceptable only because
   that network is not reachable from outside the host (2.5), not

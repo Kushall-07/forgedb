@@ -156,7 +156,19 @@ export class BackendRequestError extends Error {
   }
 }
 
-const API_BASE_PATH = '/api';
+/**
+ * Local dev keeps the relative '/api' path, which Vite's dev proxy
+ * forwards to FORGEDB_HTTP_ADDR server-side (see vite.config.ts). A
+ * deployed build (e.g. on Vercel) has no such proxy, so it instead
+ * needs an absolute URL to the public ForgeDB endpoint -- set
+ * VITE_FORGEDB_API_BASE_URL at build time (a Vercel project
+ * environment variable, never a committed file) to the stable HTTPS
+ * hostname Caddy terminates TLS for (see deploy/README.md's HTTPS
+ * section). This is exactly the cross-origin case internal/api/cors.go
+ * exists for: FORGEDB_CORS_ORIGINS on the backend must list this
+ * dashboard's own deployed origin.
+ */
+const API_BASE_PATH: string = import.meta.env.VITE_FORGEDB_API_BASE_URL || '/api';
 
 async function requestJson<T>(path: string): Promise<T> {
   let res: Response;

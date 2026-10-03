@@ -34,10 +34,21 @@
 # forwarding to does -- so this file never needs to change when
 # leadership moves.
 #
-# Replace "example.com" with your real domain; do not hardcode a real
-# production address in a tracked file (see .env.example's own note on
-# secrets -- the same principle applies to deployment-specific hostnames).
-example.com {
+# {$FORGEDB_PUBLIC_HOSTNAME} is Caddy's own environment-variable
+# placeholder syntax (not a ForgeDB feature) -- Caddy substitutes it
+# with the FORGEDB_PUBLIC_HOSTNAME environment variable's value at
+# startup, before parsing the rest of this file, so the real public
+# hostname never has to be written into this tracked file (see
+# deploy/caddy.env.example for how to set it on the Azure VM). Once
+# this resolves to a real DNS hostname (anything other than
+# "localhost" or a bare IP), Caddy's automatic HTTPS turns on for this
+# site with no further configuration here: it requests a certificate
+# from Let's Encrypt via the ACME HTTP-01 challenge (needs port 80
+# reachable from the Internet, briefly, per issuance/renewal), listens
+# on :443, and redirects plain :80 requests to :443. See
+# deploy/README.md's HTTPS section for the DNS/NSG prerequisites and
+# how to validate the certificate once it's issued.
+{$FORGEDB_PUBLIC_HOSTNAME} {
 	# Baseline security headers (Phase 13 --
 	# docs/deployment/phase13-hardening.md). These are static response
 	# headers Caddy adds to every response regardless of upstream status,
@@ -64,17 +75,27 @@ example.com {
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
-	reverse_proxy forge-gateway:8090
+	# forge-gateway:8090 (the Docker Compose service name) only resolves
+	# on forgedb-net, the Docker-internal network -- Caddy itself runs
+	# natively on the VM, outside that network (see docker-compose.yml's
+	# forge-gateway service comment), and reaches forge-gateway the same
+	# way deploy/README.md's curl examples do: via the loopback-bound
+	# published port.
+	reverse_proxy 127.0.0.1:8090
 }
 
 # forge-gateway forwards Authorization headers unchanged and does not
 # itself require FORGEDB_API_TOKEN (see docker-compose.yml's
 # forge-gateway service) -- every protected endpoint's authentication is
 # still enforced exactly as before, inside whichever ForgeDB node
-# ultimately answers (see internal/api/auth.go). Caddy's own TLS
-# termination (or a Cloudflare Tunnel in front of it) is unaffected by
-# this change: only the reverse_proxy upstream target changed, from a
-# specific node to the stable gateway address.
+# ultimately answers (see internal/api/auth.go). This is true
+# regardless of what sits in front of Caddy: a stable DNS hostname with
+# Caddy terminating TLS directly (the intended production setup -- see
+# deploy/README.md's HTTPS section), or a temporary Cloudflare Quick
+# Tunnel in front of plain HTTP Caddy (useful for local development/
+# testing, but not a stable production endpoint -- its hostname changes
+# every restart). Either way, only the reverse_proxy upstream target
+# matters here: a specific node vs. the stable gateway address.
 #
 # CORS is NOT handled here. The dashboard's cross-origin access (see
 # docs/deployment/phase13-hardening.md) is handled end to end by

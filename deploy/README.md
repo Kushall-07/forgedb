@@ -381,10 +381,183 @@ production security configuration:
   `/health`/`/ready`. This is a minimal boundary control, not a full
   authorization system -- there is one shared token for every caller
   (no per-user identity, scopes, or rotation), and the connection itself
-  is still plaintext HTTP unless you terminate TLS in front of it (e.g.
-  at the Cloudflare tunnel). Treat the token like any other secret:
-  generate it randomly, never commit it, and rotate it (restart every
-  node with a new `FORGEDB_API_TOKEN`) if it may have leaked.
+  is still plaintext HTTP unless you terminate TLS in front of it --
+  either Caddy itself, for a stable hostname (see
+  [Section 18](#18-public-https-endpoint-caddy) below), or a temporary
+  Cloudflare Quick Tunnel for local development/testing. Treat the
+  token like any other secret: generate it randomly, never commit it,
+  and rotate it (restart every node with a new `FORGEDB_API_TOKEN`) if
+  it may have leaked.
+
+## 18. Public HTTPS endpoint (Caddy)
+
+This section covers taking the Caddy -> `forge-gateway` path (already
+running natively on the Azure VM per [Section 1](#1-prerequisites) and
+[`docs/deployment/phase13-hardening.md`](../docs/deployment/phase13-hardening.md))
+from a temporary Cloudflare Quick Tunnel to a stable, Caddy-terminated
+HTTPS hostname. Nothing below changes `forge-gateway`, any ForgeDB
+node, or the Docker Compose topology -- only Caddy's own configuration
+and what DNS/firewall rules point at it.
+
+### 18.1 DNS requirement
+
+You need a DNS hostname whose **A** record (or **AAAA**, if the VM has
+a public IPv6 address) points at the Azure VM's public IP address.
+Caddy's automatic HTTPS (18.3 below) only works for a real, resolvable
+hostname -- it never requests a certificate for a bare IP address or
+for `localhost`. Any registrar/DNS provider works; there is nothing
+ForgeDB- or Azure-specific about the record itself, only that it must
+resolve correctly *before* Caddy attempts to obtain a certificate (an
+ACME HTTP-01 challenge fails if the hostname does not yet resolve to
+this VM).
+
+### 18.2 Azure NSG requirement
+
+The VM's Network Security Group must allow inbound:
+
+- **TCP 443** -- required. This is the stable HTTPS endpoint itself.
+- **TCP 80** -- required for normal Caddy behavior, not optional in
+  practice: Caddy's automatic HTTPS uses the ACME HTTP-01 challenge
+  (served on port 80) to initially obtain and later renew the
+  certificate, and it also runs a plain-HTTP-to-HTTPS redirect on 80
+  for any client that connects there directly. Blocking 80 entirely
+  will eventually break certificate renewal even if the first
+  certificate was obtained before the port was closed.
+
+No other inbound port is required for this phase. `forge-gateway`
+(8090), the three ForgeDB nodes' HTTP/gRPC ports (8081-8083,
+9091-9093), and gRPC between nodes all remain reachable only from the
+VM itself (loopback) or the Docker-internal `forgedb-net` network --
+see 18.5/18.6 below for how to verify that stays true.
+
+### 18.3 Caddy certificate behavior
+
+With `deploy/Caddyfile.example`'s site label resolving to a real
+hostname (via `FORGEDB_PUBLIC_HOSTNAME`, see
+[`deploy/caddy.env.example`](caddy.env.example)), Caddy's automatic
+HTTPS requires no further configuration in this file: on startup (or
+on first request, depending on Caddy version/config) it requests a
+certificate from Let's Encrypt via ACME HTTP-01, stores it under its
+own data directory (`/var/lib/caddy` for the standard Debian/Ubuntu
+package), and renews it automatically well before expiry. There is
+nothing to schedule or cron -- this is Caddy's normal, built-in
+behavior for any non-`localhost`, non-IP site address, not a
+ForgeDB-specific feature.
+
+Setup on the Azure VM:
+
+```sh
+sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile
+sudo cp deploy/caddy.env.example /etc/caddy/caddy.env
+sudo $EDITOR /etc/caddy/caddy.env    # set your real FORGEDB_PUBLIC_HOSTNAME
+sudo systemctl edit caddy
+# paste into the override file systemctl opens:
+#   [Service]
+#   EnvironmentFile=/etc/caddy/caddy.env
+sudo systemctl daemon-reload
+sudo systemctl restart caddy
+sudo systemctl status caddy          # confirm it started and bound :443
+```
+
+### 18.4 Validating Caddyfile syntax (no production domain required)
+
+Caddy can validate a Caddyfile's syntax and structure without ever
+contacting Let's Encrypt or requiring the real hostname to resolve --
+substitute any placeholder for `FORGEDB_PUBLIC_HOSTNAME` to do this
+locally, including on a dev machine with no public DNS at all:
+
+```sh
+FORGEDB_PUBLIC_HOSTNAME=example.test caddy validate --config deploy/Caddyfile.example --adapter caddyfile
+```
+
+If `caddy` isn't installed locally, the official image validates it
+identically, with no Caddy install required on your machine:
+
+```sh
+docker run --rm -e FORGEDB_PUBLIC_HOSTNAME=example.test \
+  -v "$(pwd)/deploy/Caddyfile.example:/etc/caddy/Caddyfile:ro" \
+  caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+(On Windows with Git Bash, prefix with `MSYS_NO_PATHCONV=1` so the
+`-v`/`--config` paths aren't mangled into Windows paths.) A successful
+run logs `"adapted config to JSON"`, confirms `http.auto_https` is
+enabling automatic HTTP->HTTPS redirects for the site, and ends with
+`Valid configuration`.
+
+This confirms the file parses and the directives (`header`,
+`reverse_proxy`) are well-formed; it does **not** prove a real
+certificate will be issued for your actual hostname -- that requires
+the real DNS record (18.1) and NSG rule (18.2) to be live, and must be
+tested against the real hostname, not asserted from syntax validation
+alone.
+
+### 18.5 Verifying the certificate (once DNS + NSG are live)
+
+```sh
+curl -v https://<your-real-hostname>/health
+```
+
+A successful response with no `curl` TLS warnings confirms the
+certificate chain is valid and trusted. You can also inspect the
+certificate directly:
+
+```sh
+echo | openssl s_client -connect <your-real-hostname>:443 -servername <your-real-hostname> 2>/dev/null | openssl x509 -noout -issuer -dates
+```
+
+`-issuer` should show Let's Encrypt (or your configured CA); `-dates`
+shows the validity window Caddy will renew ahead of.
+
+### 18.6 Verifying forge-gateway and node ports remain private
+
+From a machine **outside** the Azure VM (confirming the NSG actually
+blocks these, not just that nothing is listening locally):
+
+```sh
+# Each of these should time out or be refused -- not succeed:
+curl --max-time 5 http://<vm-public-ip>:8090/health    # forge-gateway
+curl --max-time 5 http://<vm-public-ip>:8081/health    # forgedb-1
+curl --max-time 5 http://<vm-public-ip>:9091           # forgedb-1 gRPC
+```
+
+From **on** the Azure VM itself, confirm these same ports are only
+bound to loopback (defense in depth independent of the NSG -- see
+`docker-compose.yml`'s per-service ports comments and
+[`docs/deployment/phase13-hardening.md`](../docs/deployment/phase13-hardening.md#25-docker-port-exposure-docker-composeyml)):
+
+```sh
+ss -tlnp | grep -E ':(8081|8082|8083|8090|9091|9092|9093)\b'
+# every line should show 127.0.0.1:<port>, never 0.0.0.0:<port> or [::]:<port>
+```
+
+Only `:443` (and `:80`, for ACME/redirect) should show a listener bound
+to all interfaces -- that is Caddy, and is expected.
+
+### 18.7 Dashboard API base URL
+
+The dashboard (`dashboard/src/services/forgedbApi.ts`) calls a
+relative `/api/...` path by default, which only works through Vite's
+local dev proxy (`dashboard/vite.config.ts`). A deployed build (e.g.
+on Vercel) has no such proxy, so it needs `VITE_FORGEDB_API_BASE_URL`
+set at build time to the stable `https://<your-real-hostname>` from
+this section -- as a Vercel **Project Settings -> Environment
+Variable**, never a committed file (see
+[`dashboard/.env.example`](../dashboard/.env.example)). This makes the
+dashboard's API calls genuinely cross-origin (dashboard on its Vercel
+domain, API on this Caddy hostname), which is exactly the case
+`FORGEDB_CORS_ORIGINS` (18.8) exists for.
+
+### 18.8 CORS origin
+
+Set `FORGEDB_CORS_ORIGINS` (every ForgeDB node, via `.env` /
+Compose -- see [Section 1.1](#11-authentication) and
+[`docs/deployment/phase13-hardening.md`](../docs/deployment/phase13-hardening.md#21-cors-internalapicorsgo-new))
+to the dashboard's real deployed origin (e.g.
+`https://your-dashboard.vercel.app`), once that's known. This is
+unrelated to `FORGEDB_PUBLIC_HOSTNAME` -- one governs which browser
+origins the API answers cross-origin requests from, the other is the
+hostname Caddy itself serves.
 
 ## Troubleshooting
 
