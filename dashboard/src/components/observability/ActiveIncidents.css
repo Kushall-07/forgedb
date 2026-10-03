@@ -1,0 +1,84 @@
+.observability-incidents {
+  margin-bottom: var(--sc-9);
+}
+
+.observability-incidents__empty {
+  padding: var(--sc-5);
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}
+
+.observability-incidents__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-3);
+}
+
+.observability-incidents__item {
+  display: flex;
+  gap: var(--sc-4);
+  padding: var(--sc-4) var(--sc-5);
+}
+
+.observability-incidents__icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+}
+.observability-incidents__icon--warn {
+  color: var(--status-warn);
+  background: var(--status-warn-soft);
+  border: 1px solid var(--status-warn-border);
+}
+.observability-incidents__icon--critical {
+  color: var(--status-critical);
+  background: var(--status-critical-soft);
+  border: 1px solid var(--status-critical-border);
+}
+
+.observability-incidents__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.observability-incidents__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sc-3);
+  flex-wrap: wrap;
+}
+
+.observability-incidents__title {
+  margin: 0;
+  font-size: var(--sc-t-base);
+  font-weight: 600;
+  color: var(--sc-ink);
+}
+
+.observability-incidents__description {
+  margin: 0;
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+  max-width: 68ch;
+}
+
+.observability-incidents__meta {
+  display: flex;
+  gap: 8px;
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: var(--sc-track-wide);
+}
+
+@media (max-width: 560px) {
+  .observability-incidents__item {
+    flex-direction: column;
+  }
+}

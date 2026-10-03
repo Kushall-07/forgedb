@@ -1,0 +1,51 @@
+.observability-health {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--sc-4);
+  margin-bottom: var(--sc-8);
+}
+
+.observability-health__status {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--sc-3);
+  padding: var(--sc-5);
+  background: linear-gradient(160deg, color-mix(in oklab, var(--status-sync) 10%, var(--surface-1)), var(--surface-1));
+}
+
+.observability-health__signals {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--sc-3);
+}
+
+.observability-health__signal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  padding: var(--sc-4);
+  min-width: 0;
+}
+
+.observability-health__signal-label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+}
+
+@media (max-width: 1100px) {
+  .observability-health {
+    grid-template-columns: 1fr;
+  }
+  .observability-health__signals {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .observability-health__signals {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

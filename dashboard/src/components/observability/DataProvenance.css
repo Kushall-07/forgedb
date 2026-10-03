@@ -1,0 +1,21 @@
+.observability-provenance {
+  display: flex;
+  gap: var(--sc-3);
+  align-items: flex-start;
+  padding: var(--sc-4) var(--sc-5);
+  margin-bottom: var(--sc-4);
+  background: color-mix(in oklab, var(--surface-1) 80%, transparent);
+}
+
+.observability-provenance__icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--status-warn);
+}
+
+.observability-provenance__text {
+  margin: var(--sc-1) 0 0;
+  max-width: 68ch;
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}

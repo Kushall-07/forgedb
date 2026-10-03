@@ -1,0 +1,52 @@
+.observability-storage {
+  margin-bottom: var(--sc-9);
+}
+
+.observability-storage__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sc-3);
+}
+
+.observability-storage__panel {
+  padding: var(--sc-4) var(--sc-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-3);
+  min-width: 0;
+}
+
+.observability-storage__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+}
+
+.observability-storage__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sc-2);
+  font-size: var(--sc-t-sm);
+  color: var(--sc-ink-soft);
+}
+
+.observability-storage__row .mono {
+  color: var(--sc-ink);
+}
+
+.observability-storage__value--warn {
+  color: var(--status-warn) !important;
+}
+
+@media (max-width: 1100px) {
+  .observability-storage__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .observability-storage__grid {
+    grid-template-columns: 1fr;
+  }
+}

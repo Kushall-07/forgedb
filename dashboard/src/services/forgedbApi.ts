@@ -2,6 +2,14 @@ import { cluster, nodes, storage } from '../data/mockCluster';
 import { events } from '../data/mockEvents';
 import { executeKvRequest, getEntry, getOperations } from '../data/mockKV';
 import { raftEvents, raftLog, raftNodes, raftSnapshot } from '../data/mockRaft';
+import {
+  activeIncidents,
+  nodeHealth,
+  observabilityEvents,
+  raftTelemetry,
+  storageTelemetry,
+  systemMetrics,
+} from '../data/mockObservability';
 import type { ClusterState, NodeState, RaftEvent, StorageState } from '../types/cluster';
 import type { KVEntry, KVExecutionResult, KVOperation, KVRequestInput } from '../types/kv';
 import type {
@@ -10,6 +18,14 @@ import type {
   RaftNodeState,
   RaftSnapshotState,
 } from '../types/raft';
+import type {
+  NodeHealthRecord,
+  ObservabilityEvent,
+  ObservabilityIncident,
+  RaftTelemetryMetrics,
+  StorageTelemetryMetrics,
+  SystemMetrics,
+} from '../types/observability';
 
 /**
  * The future ForgeDB HTTP API boundary. Components in this phase read mock
@@ -27,13 +43,21 @@ import type {
  *   GET /raft/log      -> RaftLogEntry[]
  *   GET /raft/events   -> RaftEvent[]
  *   GET /raft/snapshot -> RaftSnapshotState
+ *   GET /observability/system    -> SystemMetrics
+ *   GET /observability/raft      -> RaftTelemetryMetrics
+ *   GET /observability/storage   -> StorageTelemetryMetrics
+ *   GET /observability/nodes     -> NodeHealthRecord[]
+ *   GET /observability/events    -> ObservabilityEvent[]
+ *   GET /observability/incidents -> ObservabilityIncident[]
  *
  * No network calls are made here. Swapping the bodies below for `fetch(...)`
  * calls is the entire migration; no UI component needs to change. The KV
  * Console itself still reads src/data/mockKV.ts directly, and the Raft page
  * still reads src/data/mockRaft.ts directly, the same way Overview and
  * Cluster read src/data/mockCluster.ts, so this interface is documentation of
- * the target contract rather than code already on the render path.
+ * the target contract rather than code already on the render path. The
+ * Observability page follows the same pattern, reading
+ * src/data/mockObservability.ts directly rather than through this module.
  */
 export interface ForgeDbApi {
   getCluster(): Promise<ClusterState>;
@@ -48,6 +72,12 @@ export interface ForgeDbApi {
   getRaftLog(): Promise<RaftLogEntry[]>;
   getRaftEvents(): Promise<RaftConsensusEvent[]>;
   getRaftSnapshot(): Promise<RaftSnapshotState>;
+  getSystemMetrics(): Promise<SystemMetrics>;
+  getRaftMetrics(): Promise<RaftTelemetryMetrics>;
+  getStorageMetrics(): Promise<StorageTelemetryMetrics>;
+  getNodeHealth(): Promise<NodeHealthRecord[]>;
+  getObservabilityEvents(): Promise<ObservabilityEvent[]>;
+  getActiveIncidents(): Promise<ObservabilityIncident[]>;
 }
 
 export const forgedbApi: ForgeDbApi = {
@@ -86,5 +116,23 @@ export const forgedbApi: ForgeDbApi = {
   },
   async getRaftSnapshot() {
     return raftSnapshot;
+  },
+  async getSystemMetrics() {
+    return systemMetrics;
+  },
+  async getRaftMetrics() {
+    return raftTelemetry;
+  },
+  async getStorageMetrics() {
+    return storageTelemetry;
+  },
+  async getNodeHealth() {
+    return nodeHealth;
+  },
+  async getObservabilityEvents() {
+    return observabilityEvents;
+  },
+  async getActiveIncidents() {
+    return activeIncidents;
   },
 };

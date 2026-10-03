@@ -1,0 +1,77 @@
+.observability-metrics {
+  margin-bottom: var(--sc-9);
+}
+
+.observability-metrics__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sc-3);
+}
+
+.observability-metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  padding: var(--sc-4) var(--sc-5);
+  min-width: 0;
+}
+
+.observability-metric__value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.observability-metric__value {
+  font-size: var(--sc-t-xl);
+  font-weight: 500;
+  letter-spacing: var(--sc-track-snug);
+  color: var(--sc-ink);
+  line-height: 1.1;
+}
+
+.observability-metric__unit {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.observability-metric__delta {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.observability-metric__trend {
+  margin-top: 2px;
+  height: 28px;
+}
+
+.observability-metric--sync .observability-metric__value {
+  color: var(--status-sync);
+}
+.observability-metric--warn .observability-metric__value {
+  color: var(--status-warn);
+}
+.observability-metric--critical .observability-metric__value {
+  color: var(--status-critical);
+}
+.observability-metric--identity .observability-metric__value {
+  color: var(--status-identity);
+}
+
+@media (max-width: 1200px) {
+  .observability-metrics__grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 860px) {
+  .observability-metrics__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .observability-metrics__grid {
+    grid-template-columns: 1fr;
+  }
+}

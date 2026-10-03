@@ -16,7 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/cluster', label: 'Cluster', icon: Share2 },
   { to: '/kv', label: 'KV Console', icon: Terminal },
   { to: '/raft', label: 'Raft', icon: GitBranch },
-  { to: '/observability', label: 'Observability', icon: Activity, soon: true },
+  { to: '/observability', label: 'Observability', icon: Activity },
 ];
 
 interface SidebarProps {

@@ -1,0 +1,93 @@
+.observability-raft {
+  margin-bottom: var(--sc-9);
+}
+
+.observability-raft__flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sc-6);
+  padding: var(--sc-6) var(--sc-5);
+  margin-bottom: var(--sc-4);
+}
+
+.observability-raft__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 108px;
+}
+
+.observability-raft__stage-label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+}
+
+.observability-raft__stage-value {
+  font-size: var(--sc-t-xl);
+  font-weight: 500;
+  color: var(--sc-ink);
+}
+.observability-raft__stage-value--sync {
+  color: var(--status-sync);
+}
+.observability-raft__stage-value--identity {
+  color: var(--status-identity);
+}
+
+.observability-raft__stage-sub {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.observability-raft__arrow {
+  flex: none;
+  color: var(--sc-ink-soft);
+}
+
+.observability-raft__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--sc-3);
+}
+
+.observability-raft__heartbeat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-2);
+  padding: var(--sc-4) var(--sc-5);
+  min-width: 0;
+}
+
+.observability-raft__signal-label {
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  text-transform: uppercase;
+  color: var(--sc-ink-soft);
+}
+
+.observability-raft__heartbeat-sub {
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+@media (max-width: 1200px) {
+  .observability-raft__grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .observability-raft__flow {
+    gap: var(--sc-3);
+  }
+  .observability-raft__stage {
+    min-width: 84px;
+  }
+  .observability-raft__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

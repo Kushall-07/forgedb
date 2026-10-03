@@ -1,0 +1,53 @@
+.observability-request-latency {
+  margin-bottom: var(--sc-9);
+}
+
+.observability-request-latency__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sc-4);
+}
+
+.observability-request-latency__chart {
+  padding: var(--sc-5);
+  min-width: 0;
+}
+
+.observability-request-latency__legend {
+  display: flex;
+  gap: var(--sc-4);
+  margin-top: var(--sc-2);
+}
+
+.observability-request-latency__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.observability-request-latency__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.observability-request-latency__swatch--sync {
+  background: var(--status-sync);
+}
+.observability-request-latency__swatch--identity {
+  background: var(--status-identity);
+}
+.observability-request-latency__swatch--warn {
+  background: var(--status-warn);
+}
+.observability-request-latency__swatch--critical {
+  background: var(--status-critical);
+}
+
+@media (max-width: 960px) {
+  .observability-request-latency__grid {
+    grid-template-columns: 1fr;
+  }
+}

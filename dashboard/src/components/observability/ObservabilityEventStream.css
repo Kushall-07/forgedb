@@ -1,0 +1,119 @@
+.observability-events {
+  margin-bottom: var(--sc-9);
+}
+
+.observability-events__filters {
+  display: flex;
+  gap: var(--sc-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sc-4);
+}
+
+.observability-events__filter {
+  padding: 6px var(--sc-3);
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink-soft);
+  border: 1px solid var(--sc-hairline-strong);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--sc-d-base) var(--sc-ease-out),
+    color var(--sc-d-base) var(--sc-ease-out);
+}
+.observability-events__filter:focus-visible {
+  outline: 2px solid var(--sc-accent);
+  outline-offset: 2px;
+}
+.observability-events__filter--active {
+  color: var(--status-sync);
+  border-color: var(--status-sync-border);
+  background: var(--status-sync-soft);
+}
+
+.observability-events__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--sc-2) 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.observability-events__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sc-4);
+  padding: var(--sc-3) var(--sc-5);
+  border-bottom: 1px solid var(--sc-hairline);
+}
+.observability-events__item:last-child {
+  border-bottom: none;
+}
+
+.observability-events__time {
+  flex: none;
+  width: 4.5rem;
+  font-size: var(--sc-t-xs);
+  color: var(--sc-ink-soft);
+}
+
+.observability-events__severity {
+  flex: none;
+  width: 4rem;
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  text-align: center;
+  border: 1px solid var(--sc-hairline-strong);
+}
+.observability-events__severity--neutral {
+  color: var(--sc-ink-soft);
+}
+.observability-events__severity--warn {
+  color: var(--status-warn);
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-soft);
+}
+.observability-events__severity--critical {
+  color: var(--status-critical);
+  border-color: var(--status-critical-border);
+  background: var(--status-critical-soft);
+}
+
+.observability-events__category {
+  flex: none;
+  width: 6rem;
+  font-size: var(--sc-t-xs);
+  color: var(--status-identity);
+  letter-spacing: var(--sc-track-wide);
+}
+
+.observability-events__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.observability-events__message {
+  color: var(--sc-ink);
+  font-size: var(--sc-t-sm);
+}
+
+.observability-events__source {
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-xs);
+}
+
+.observability-events__empty {
+  padding: var(--sc-4) var(--sc-5);
+  color: var(--sc-ink-soft);
+  font-size: var(--sc-t-sm);
+}
+
+@media (max-width: 640px) {
+  .observability-events__item {
+    flex-wrap: wrap;
+    padding: var(--sc-3) var(--sc-4);
+  }
+}
