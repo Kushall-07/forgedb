@@ -67,6 +67,15 @@ const (
 	DefaultHeartbeatTick   = 2
 )
 
+// DefaultSnapshotChunkSize bounds how many bytes of a snapshot's Data
+// payload a single InstallSnapshot chunk carries when
+// Options.SnapshotChunkSize is left at zero (see
+// docs/deployment/phase19-chunked-snapshot-transfer.md). It is
+// comfortably below both format.go's maxSnapshotDataSize ceiling and
+// internal/transport's gRPC message-size limit, so chunked transfer
+// never needs special-case tuning for ordinary snapshot sizes.
+const DefaultSnapshotChunkSize = 1 << 20 // 1 MiB
+
 // Options configures a new Node.
 type Options struct {
 	// ID uniquely identifies this node within the cluster.
@@ -110,6 +119,14 @@ type Options struct {
 	// which reproduces Phase 5's original behavior exactly: a Node that
 	// forgets everything if the process restarts.
 	Persister Persister
+
+	// SnapshotChunkSize bounds how many bytes of a snapshot's Data this
+	// node sends per InstallSnapshot chunk when it is the leader (see
+	// docs/deployment/phase19-chunked-snapshot-transfer.md). Defaults to
+	// DefaultSnapshotChunkSize when left at zero. Tests that want to
+	// exercise multi-chunk transfers deterministically with small
+	// payloads typically set this to a small value.
+	SnapshotChunkSize int
 }
 
 // Node is a single participant in Raft consensus: it tracks the state
@@ -224,6 +241,22 @@ type Node struct {
 	// state machine is the snapshot's own source, already in exactly that
 	// state, with nothing to restore.
 	pendingSnapshot *Snapshot
+
+	// snapshotChunkSize bounds the size of each chunk this node sends as
+	// an InstallSnapshot leader -- see Options.SnapshotChunkSize. Always
+	// positive (NewNode defaults it from DefaultSnapshotChunkSize).
+	snapshotChunkSize int
+
+	// chunkTransfer tracks an InstallSnapshot transfer this node is
+	// currently receiving and assembling in bounded chunks, entirely in
+	// memory -- see receiveSnapshotChunkLocked in snapshot.go and
+	// docs/deployment/phase19-chunked-snapshot-transfer.md. It is nil
+	// whenever no chunked transfer is in progress, and is never persisted:
+	// a crash while it is non-nil loses the partial transfer completely,
+	// which is exactly the intended fail-closed behavior (there is no
+	// on-disk trace of an incomplete transfer to misinterpret as a valid
+	// snapshot on restart).
+	chunkTransfer *inProgressSnapshotTransfer
 }
 
 // NewNode constructs a Node from opts. If opts.Persister has previously
@@ -267,20 +300,25 @@ func NewNode(opts Options) (*Node, error) {
 	if persister == nil {
 		persister = discardPersister{}
 	}
+	snapshotChunkSize := opts.SnapshotChunkSize
+	if snapshotChunkSize <= 0 {
+		snapshotChunkSize = DefaultSnapshotChunkSize
+	}
 
 	n := &Node{
-		id:              opts.ID,
-		peers:           append([]string(nil), opts.Peers...),
-		role:            Follower,
-		transport:       opts.Transport,
-		electionTickMin: electionMin,
-		electionTickMax: electionMax,
-		heartbeatTick:   heartbeatTick,
-		rnd:             rnd,
-		persister:       persister,
-		commitCh:        make(chan struct{}, 1),
-		appliedCh:       make(chan struct{}, 1),
-		stopCh:          make(chan struct{}),
+		id:                opts.ID,
+		peers:             append([]string(nil), opts.Peers...),
+		role:              Follower,
+		transport:         opts.Transport,
+		electionTickMin:   electionMin,
+		electionTickMax:   electionMax,
+		heartbeatTick:     heartbeatTick,
+		rnd:               rnd,
+		persister:         persister,
+		snapshotChunkSize: snapshotChunkSize,
+		commitCh:          make(chan struct{}, 1),
+		appliedCh:         make(chan struct{}, 1),
+		stopCh:            make(chan struct{}),
 	}
 
 	state, stateErr := persister.LoadState()

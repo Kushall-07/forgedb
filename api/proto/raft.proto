@@ -60,18 +60,28 @@ message AppendEntriesReply {
   bool success = 2;
 }
 
-// InstallSnapshotRequest mirrors raft.InstallSnapshotArgs. data is the
-// entire serialized state-machine snapshot in one message -- Phase 9
-// does not chunk snapshots (see internal/raft/message.go), so the
-// transport bounds this with a deliberate, documented gRPC max-message
-// size (see internal/transport.DefaultMaxMessageBytes) rather than an
-// unlimited one.
+// InstallSnapshotRequest mirrors raft.InstallSnapshotArgs. Phase 19 adds
+// optional chunking (see internal/raft/message.go and
+// docs/deployment/phase19-chunked-snapshot-transfer.md): when chunked is
+// false (the default for a message that never sets it), data is, exactly
+// as in Phase 9, the entire serialized state-machine snapshot in one
+// message. When chunked is true, data is one bounded piece of the full
+// payload and offset/final/total_size/checksum describe its place in the
+// larger transfer, letting a single logical InstallSnapshot exceed what
+// one message would otherwise comfortably carry under the transport's
+// deliberate, documented gRPC max-message size (see
+// internal/transport.DefaultMaxMessageBytes) without raising it.
 message InstallSnapshotRequest {
   uint64 term = 1;
   string leader_id = 2;
   uint64 last_included_index = 3;
   uint64 last_included_term = 4;
   bytes data = 5;
+  bool chunked = 6;
+  uint64 offset = 7;
+  bool final = 8;
+  uint64 total_size = 9;
+  uint32 checksum = 10;
 }
 
 // InstallSnapshotReply mirrors raft.InstallSnapshotReply.

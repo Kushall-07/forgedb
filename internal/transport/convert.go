@@ -115,6 +115,11 @@ func installSnapshotArgsToProto(a raft.InstallSnapshotArgs) *raftpb.InstallSnaps
 		LastIncludedIndex: a.LastIncludedIndex,
 		LastIncludedTerm:  a.LastIncludedTerm,
 		Data:              a.Data,
+		Chunked:           a.Chunked,
+		Offset:            a.Offset,
+		Final:             a.Final,
+		TotalSize:         a.TotalSize,
+		Checksum:          a.Checksum,
 	}
 }
 
@@ -128,6 +133,11 @@ func installSnapshotArgsFromProto(r *raftpb.InstallSnapshotRequest) raft.Install
 		LastIncludedIndex: r.LastIncludedIndex,
 		LastIncludedTerm:  r.LastIncludedTerm,
 		Data:              r.Data,
+		Chunked:           r.Chunked,
+		Offset:            r.Offset,
+		Final:             r.Final,
+		TotalSize:         r.TotalSize,
+		Checksum:          r.Checksum,
 	}
 }
 

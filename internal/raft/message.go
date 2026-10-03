@@ -61,20 +61,61 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
-// InstallSnapshotArgs is the InstallSnapshot RPC request (Phase 9): sent
-// by a leader to a follower whose nextIndex has fallen at or behind the
+// InstallSnapshotArgs is the InstallSnapshot RPC request: sent by a
+// leader to a follower whose nextIndex has fallen at or behind the
 // leader's own compacted log boundary, so ordinary AppendEntries can no
 // longer bring it up to date (the leader no longer has the entries that
 // would require -- see docs/raft/phase9-snapshots.md). Data is the
 // state machine's entire opaque serialized state through
-// LastIncludedIndex; Phase 9 sends it as a single RPC rather than
-// chunking it (see the phase doc's known limitations).
+// LastIncludedIndex.
+//
+// Phase 9 sent the whole of Data in a single RPC. Phase 19
+// (docs/deployment/phase19-chunked-snapshot-transfer.md) adds the
+// ability to send it as a bounded sequence of chunks instead, via the
+// fields below -- modeled on the Raft paper's own offset/done
+// InstallSnapshot fields. Chunked is false (the zero value) for every
+// pre-Phase-19 caller, in which case Data is, exactly as before, the
+// complete payload and every field below is ignored; HandleInstallSnapshot
+// preserves this legacy behavior unchanged.
 type InstallSnapshotArgs struct {
 	Term              uint64
 	LeaderID          string
 	LastIncludedIndex uint64
 	LastIncludedTerm  uint64
 	Data              []byte
+
+	// Chunked, when true, means Data is one bounded chunk of this
+	// snapshot's full payload rather than the complete payload, and the
+	// fields below describe this chunk's place in the larger transfer.
+	Chunked bool
+
+	// Offset is this chunk's byte position within the full snapshot
+	// payload. The first chunk of every transfer -- including the first
+	// attempt and every retry of a transfer that never completed -- must
+	// have Offset 0; receiving one always (re)starts a fresh transfer for
+	// this LastIncludedIndex/LastIncludedTerm, discarding any previous
+	// in-progress transfer (see HandleInstallSnapshot).
+	Offset uint64
+
+	// Final reports whether this is the last chunk of the transfer: once
+	// it arrives and the receiver's reconstructed payload is exactly
+	// TotalSize bytes, the complete snapshot is validated and installed
+	// exactly as the non-chunked path always has.
+	Final bool
+
+	// TotalSize is the full snapshot payload's total length in bytes,
+	// carried on every chunk so the receiver can validate completion
+	// (Final must coincide with the reconstructed payload reaching
+	// exactly TotalSize, never more or less) without trusting Final
+	// alone.
+	TotalSize uint64
+
+	// Checksum is a CRC-32C checksum (the same algorithm and table
+	// internal/raft/format.go already uses for on-disk persistence) over
+	// this chunk's own Data, letting the receiver detect a corrupted
+	// chunk before it is ever appended to the in-progress reconstruction
+	// buffer.
+	Checksum uint32
 }
 
 // InstallSnapshotReply is the InstallSnapshot RPC response. Success is

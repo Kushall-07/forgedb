@@ -2,6 +2,7 @@ package raft
 
 import (
 	"fmt"
+	"hash/crc32"
 
 	"github.com/Kushall-07/forgedb/internal/metrics"
 )
@@ -62,50 +63,88 @@ func (n *Node) broadcastAppendEntriesLocked() {
 	n.maybeAdvanceCommitIndexLocked()
 }
 
-// sendInstallSnapshot sends a single InstallSnapshot RPC to peer and
-// processes the reply: on success, it advances that peer's matchIndex to
-// at least snap.LastIncludedIndex and its nextIndex to exactly
-// snap.LastIncludedIndex+1 (per Raft's InstallSnapshot handling -- see
-// docs/raft/phase9-snapshots.md), then re-checks whether a new commit
-// index can be established, exactly as a successful AppendEntries reply
-// does. It runs outside n.mu (see trackRPC).
+// sendInstallSnapshot sends snap to peer as a bounded sequence of
+// InstallSnapshot chunks (see docs/deployment/phase19-chunked-snapshot-transfer.md),
+// each one a separate RPC sent only once the previous chunk's reply has
+// been received -- this is what gives the receiver a well-defined,
+// strictly increasing offset to validate against even over a transport
+// with no ordering guarantee of its own. It runs outside n.mu (see
+// trackRPC), taking n.mu only briefly around each reply.
 //
-// Unlike sendAppendEntries, a rejected (Success=false, same-or-lower term)
-// reply needs no back-off: nextIndex is simply left unchanged, and the
-// next heartbeat round will naturally retry (most commonly because the
-// peer's own persistence failed transiently -- see HandleInstallSnapshot).
+// Any failure anywhere in the sequence -- a transport error, a
+// higher-term reply (which also triggers this node's own step-down, as
+// in sendAppendEntries), this node no longer being leader at term, or an
+// explicit Success=false (most commonly the peer's own persistence
+// failing transiently, or this exact attempt racing a newer one -- see
+// HandleInstallSnapshot) -- aborts the whole attempt immediately,
+// sending no further chunks. Unlike sendAppendEntries, there is no
+// partial progress to preserve or back off from: the next heartbeat
+// round that still finds this peer behind the snapshot boundary simply
+// starts an entirely new attempt from chunk 0, exactly as a single
+// failed non-chunked InstallSnapshot always retried from scratch.
+//
+// Only once the Final chunk's reply reports Success does this method
+// advance peer's matchIndex to at least snap.LastIncludedIndex and its
+// nextIndex to exactly snap.LastIncludedIndex+1 (per Raft's
+// InstallSnapshot handling), then re-check whether a new commit index can
+// be established, exactly as a successful AppendEntries reply does.
 func (n *Node) sendInstallSnapshot(peer string, term uint64, snap Snapshot) {
-	args := InstallSnapshotArgs{
-		Term:              term,
-		LeaderID:          n.id,
-		LastIncludedIndex: snap.LastIncludedIndex,
-		LastIncludedTerm:  snap.LastIncludedTerm,
-		Data:              snap.Data,
-	}
-	reply, err := n.transport.SendInstallSnapshot(peer, args)
-	if err != nil {
-		return // dropped/unreachable; a later heartbeat retries
-	}
+	chunkSize := n.snapshotChunkSize
+	total := uint64(len(snap.Data))
 
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if reply.Term > n.currentTerm {
-		_ = n.becomeFollowerLocked(reply.Term)
-		return
-	}
-	if n.role != Leader || n.currentTerm != term {
-		return
-	}
-
-	if reply.Success {
-		if snap.LastIncludedIndex > n.matchIndex[peer] {
-			n.matchIndex[peer] = snap.LastIncludedIndex
+	for offset := uint64(0); ; {
+		end := offset + uint64(chunkSize)
+		if end > total {
+			end = total
 		}
-		if snap.LastIncludedIndex+1 > n.nextIndex[peer] {
-			n.nextIndex[peer] = snap.LastIncludedIndex + 1
+		chunk := snap.Data[offset:end]
+		final := end == total
+
+		args := InstallSnapshotArgs{
+			Term:              term,
+			LeaderID:          n.id,
+			LastIncludedIndex: snap.LastIncludedIndex,
+			LastIncludedTerm:  snap.LastIncludedTerm,
+			Data:              chunk,
+			Chunked:           true,
+			Offset:            offset,
+			Final:             final,
+			TotalSize:         total,
+			Checksum:          crc32.Checksum(chunk, crcTable),
 		}
-		n.maybeAdvanceCommitIndexLocked()
+		reply, err := n.transport.SendInstallSnapshot(peer, args)
+		if err != nil {
+			return // dropped/unreachable; a later heartbeat retries from scratch
+		}
+
+		n.mu.Lock()
+		if reply.Term > n.currentTerm {
+			_ = n.becomeFollowerLocked(reply.Term)
+			n.mu.Unlock()
+			return
+		}
+		if n.role != Leader || n.currentTerm != term {
+			n.mu.Unlock()
+			return
+		}
+		if !reply.Success {
+			n.mu.Unlock()
+			return
+		}
+		if final {
+			if snap.LastIncludedIndex > n.matchIndex[peer] {
+				n.matchIndex[peer] = snap.LastIncludedIndex
+			}
+			if snap.LastIncludedIndex+1 > n.nextIndex[peer] {
+				n.nextIndex[peer] = snap.LastIncludedIndex + 1
+			}
+			n.maybeAdvanceCommitIndexLocked()
+			n.mu.Unlock()
+			return
+		}
+		n.mu.Unlock()
+
+		offset = end
 	}
 }
 

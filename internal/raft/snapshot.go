@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
+	"hash/crc32"
 
 	"github.com/Kushall-07/forgedb/internal/metrics"
 )
@@ -160,6 +161,102 @@ func (n *Node) ConfirmSnapshotRestored(lastIncludedIndex uint64) error {
 	return nil
 }
 
+// inProgressSnapshotTransfer tracks one chunked InstallSnapshot transfer
+// this node is currently receiving and reassembling, entirely in memory
+// -- see receiveSnapshotChunkLocked and
+// docs/deployment/phase19-chunked-snapshot-transfer.md. lastIncludedIndex/
+// lastIncludedTerm/totalSize identify which snapshot this transfer is for
+// and how large its complete payload must be; buf holds exactly the bytes
+// received so far, in order, so len(buf) is always this transfer's next
+// expected chunk offset.
+type inProgressSnapshotTransfer struct {
+	lastIncludedIndex uint64
+	lastIncludedTerm  uint64
+	totalSize         uint64
+	buf               []byte
+}
+
+// receiveSnapshotChunkLocked folds one chunk (args) into n.chunkTransfer,
+// starting, continuing, or -- on any validation failure -- discarding it.
+// n.mu must be held, and the caller must already have established that
+// args.LastIncludedIndex is not stale (at or behind this node's current
+// snapshot boundary).
+//
+// It returns ok=false if the chunk failed validation, in which case any
+// in-progress transfer is left discarded (n.chunkTransfer == nil),
+// forcing a clean restart from offset 0 rather than attempting to
+// reconcile an inconsistent stream. Otherwise ok is true and complete
+// reports whether this chunk was the transfer's Final one landing
+// exactly on its declared TotalSize -- data is only meaningful when
+// complete is true (it may legitimately be an empty, zero-length
+// payload, which is why completion is its own boolean rather than a nil
+// check on data). This
+// deliberately treats every kind of malformed chunk the same way (a
+// missing/gap offset, a duplicate/already-consumed offset, a mismatched
+// snapshot identity or declared total, a corrupt checksum, or more bytes
+// than declared): internal/raft never tries to guess which one happened
+// to decide a more lenient recovery, it simply fails closed.
+//
+// Offset 0 always (re)starts a fresh transfer for args's own
+// LastIncludedIndex/LastIncludedTerm/TotalSize, discarding whatever
+// transfer (if any) was previously in progress -- this is what lets a
+// newer snapshot cleanly supersede an incomplete older one, and is also
+// how a leader retries a transfer that never finished (see
+// sendInstallSnapshot in replication.go: any failure anywhere in a
+// chunked send aborts the whole attempt, and the next one always starts
+// again at offset 0).
+func (n *Node) receiveSnapshotChunkLocked(args InstallSnapshotArgs) (data []byte, complete bool, ok bool) {
+	if args.TotalSize > maxSnapshotDataSize {
+		return nil, false, false
+	}
+
+	var transfer *inProgressSnapshotTransfer
+	if args.Offset == 0 {
+		transfer = &inProgressSnapshotTransfer{
+			lastIncludedIndex: args.LastIncludedIndex,
+			lastIncludedTerm:  args.LastIncludedTerm,
+			totalSize:         args.TotalSize,
+		}
+	} else {
+		cur := n.chunkTransfer
+		if cur == nil ||
+			cur.lastIncludedIndex != args.LastIncludedIndex ||
+			cur.lastIncludedTerm != args.LastIncludedTerm ||
+			cur.totalSize != args.TotalSize ||
+			uint64(len(cur.buf)) != args.Offset {
+			n.chunkTransfer = nil
+			return nil, false, false
+		}
+		transfer = cur
+	}
+
+	if crc32.Checksum(args.Data, crcTable) != args.Checksum {
+		n.chunkTransfer = nil
+		return nil, false, false
+	}
+
+	newLen := uint64(len(transfer.buf)) + uint64(len(args.Data))
+	if newLen > transfer.totalSize {
+		n.chunkTransfer = nil
+		return nil, false, false
+	}
+	transfer.buf = append(transfer.buf, args.Data...)
+	n.chunkTransfer = transfer
+
+	if !args.Final {
+		return nil, false, true
+	}
+	if uint64(len(transfer.buf)) != transfer.totalSize {
+		// The sender marked this the last chunk, but the reassembled
+		// payload doesn't match the total it itself declared at the
+		// start of the transfer -- a short transfer. Reject rather than
+		// install a partial snapshot.
+		n.chunkTransfer = nil
+		return nil, false, false
+	}
+	return transfer.buf, true, true
+}
+
 // HandleInstallSnapshot implements the InstallSnapshot RPC (RPCHandler).
 // It follows the same term-check and step-down discipline as
 // HandleAppendEntries: a stale term is rejected outright, and a newer or
@@ -172,7 +269,20 @@ func (n *Node) ConfirmSnapshotRestored(lastIncludedIndex uint64) error {
 // trivial success without touching anything: this node already has
 // everything this snapshot would provide.
 //
-// Otherwise, the snapshot is persisted durably (SaveSnapshot) *before* any
+// If args.Chunked, args.Data is only one bounded piece of the full
+// payload (see receiveSnapshotChunkLocked and
+// docs/deployment/phase19-chunked-snapshot-transfer.md): every call for
+// an incomplete transfer returns Success=true without persisting
+// anything, and only once the transfer's Final chunk completes a fully
+// validated, reassembled payload does this method fall through to
+// exactly the same persist-and-install sequence described below as the
+// non-chunked path always has. A partial or corrupt chunk stream is
+// always rejected outright and its in-progress state discarded, forcing
+// a clean restart, rather than ever risking installing anything short of
+// the complete, checksummed payload.
+//
+// Otherwise (or once a chunked transfer has fully reassembled), the
+// snapshot is persisted durably (SaveSnapshot) *before* any
 // in-memory log mutation; if that fails, the RPC is rejected and nothing
 // changes, so the leader simply retries on its next heartbeat. Once
 // durable, the log's compaction boundary is updated via
@@ -212,15 +322,45 @@ func (n *Node) HandleInstallSnapshot(args InstallSnapshotArgs) InstallSnapshotRe
 
 	if args.LastIncludedIndex <= n.log.entries[0].Index {
 		// Stale or duplicate: this node is already at or past this
-		// boundary. Nothing to do.
+		// boundary. Nothing to do -- and any in-progress chunked transfer
+		// this supersedes (for this same, now-moot boundary or an older
+		// one) is discarded along with it.
+		if n.chunkTransfer != nil && args.LastIncludedIndex >= n.chunkTransfer.lastIncludedIndex {
+			n.chunkTransfer = nil
+		}
 		return InstallSnapshotReply{Term: n.currentTerm, Success: true}
+	}
+
+	// data is the complete snapshot payload to install. For a non-chunked
+	// call (Chunked is false -- every pre-Phase-19 caller, and every
+	// caller that simply chooses not to chunk) it is exactly args.Data,
+	// reproducing Phase 9's original behavior unchanged. For a chunked
+	// call it is only ever set once receiveSnapshotChunkLocked reports
+	// the transfer complete; until then nothing below this point runs,
+	// so an incomplete transfer can never reach SaveSnapshot.
+	data := args.Data
+	if args.Chunked {
+		reassembled, complete, chunkOK := n.receiveSnapshotChunkLocked(args)
+		if !chunkOK {
+			return InstallSnapshotReply{Term: n.currentTerm, Success: false}
+		}
+		if !complete {
+			// Valid chunk, but more are still expected -- nothing durable
+			// has changed, so this is not a failure from the leader's
+			// point of view either.
+			return InstallSnapshotReply{Term: n.currentTerm, Success: true}
+		}
+		data = reassembled
+	} else {
+		n.chunkTransfer = nil
 	}
 
 	if err := n.persister.SaveSnapshot(Snapshot{
 		LastIncludedIndex: args.LastIncludedIndex,
 		LastIncludedTerm:  args.LastIncludedTerm,
-		Data:              args.Data,
+		Data:              data,
 	}); err != nil {
+		n.chunkTransfer = nil
 		metrics.RaftSnapshotFailuresTotal.Inc()
 		metrics.RecordError("raft")
 		logEvent(n.id).Info(eventSnapshotFailed, "snapshot_index", args.LastIncludedIndex, "error", err.Error())
@@ -231,26 +371,28 @@ func (n *Node) HandleInstallSnapshot(args InstallSnapshotArgs) InstallSnapshotRe
 	n.log.installSnapshotBoundary(args.LastIncludedIndex, args.LastIncludedTerm)
 	if err := n.persistLocked(); err != nil {
 		n.log.entries = oldEntries
+		n.chunkTransfer = nil
 		metrics.RaftSnapshotFailuresTotal.Inc()
 		metrics.RecordError("raft")
 		logEvent(n.id).Info(eventSnapshotFailed, "snapshot_index", args.LastIncludedIndex, "error", err.Error())
 		return InstallSnapshotReply{Term: n.currentTerm, Success: false}
 	}
 
-	n.snapshotData = args.Data
+	n.snapshotData = data
 	n.pendingSnapshot = &Snapshot{
 		LastIncludedIndex: args.LastIncludedIndex,
 		LastIncludedTerm:  args.LastIncludedTerm,
-		Data:              args.Data,
+		Data:              data,
 	}
+	n.chunkTransfer = nil
 	if args.LastIncludedIndex > n.commitIndex {
 		metrics.RaftEntriesCommittedTotal.Add(args.LastIncludedIndex - n.commitIndex)
 		n.commitIndex = args.LastIncludedIndex
 		n.notifyCommitLocked()
 	}
 	metrics.RaftSnapshotsInstalledTotal.Inc()
-	metrics.RaftSnapshotBytesTotal.Add(uint64(len(args.Data)))
-	logEvent(n.id).Info(eventSnapshotInstalled, "snapshot_index", args.LastIncludedIndex, "snapshot_term", args.LastIncludedTerm, "bytes", len(args.Data))
+	metrics.RaftSnapshotBytesTotal.Add(uint64(len(data)))
+	logEvent(n.id).Info(eventSnapshotInstalled, "snapshot_index", args.LastIncludedIndex, "snapshot_term", args.LastIncludedTerm, "bytes", len(data))
 
 	return InstallSnapshotReply{Term: n.currentTerm, Success: true}
 }
