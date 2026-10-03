@@ -12,10 +12,11 @@ func TestLastApplied_StartsAtZero(t *testing.T) {
 // commitUpTo elects nodes[0] leader in a fresh 3-node test cluster and
 // proposes n commands through it, returning once they have all committed
 // (verified via CommitIndex), purely so MarkApplied has a real,
-// majority-replicated commitIndex to work against -- a single-node
-// cluster never advances its own CommitIndex in this implementation (see
-// maybeAdvanceCommitIndexLocked, only ever invoked from a peer's
-// AppendEntries reply), so these tests need at least one follower.
+// majority-replicated commitIndex to work against. A 3-node cluster is
+// used so these tests also exercise the ordinary multi-peer commit path
+// (see TestLastApplied_AdvancesOnSingleNodeCluster below for the
+// single-node case, where the leader's own log entry is already a
+// majority of one).
 func commitUpTo(t *testing.T, n int) *Node {
 	t.Helper()
 	_, nodes := newTestCluster(t, 3, func(id string, o *Options) {
@@ -70,6 +71,40 @@ func TestMarkApplied_RejectsNonMonotonic(t *testing.T) {
 	}
 	if got := leader.LastApplied(); got != 2 {
 		t.Fatalf("LastApplied after rejected calls = %d, want unchanged 2", got)
+	}
+}
+
+// TestLastApplied_AdvancesOnSingleNodeCluster covers the single-node
+// regression directly: a zero-peer leader's CommitIndex must advance on
+// its own (see TestNode_SingleNodeCluster_CommitsImmediately in
+// replication_test.go), and MarkApplied/LastApplied must be able to
+// advance against that commitIndex exactly as they do for a
+// majority-replicated multi-node commit.
+func TestLastApplied_AdvancesOnSingleNodeCluster(t *testing.T) {
+	tr := NewInMemoryTransport()
+	node := mustNewNode(t, Options{ID: "solo", Transport: tr, ElectionTickMin: 2, ElectionTickMax: 2})
+	tr.Register("solo", node)
+
+	node.Tick()
+	node.Tick()
+	node.Drain()
+	if !node.IsLeader() {
+		t.Fatalf("single-node cluster did not elect itself leader")
+	}
+
+	idx, _, err := node.Propose(Command("cmd"))
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	if got := node.CommitIndex(); got != idx {
+		t.Fatalf("CommitIndex = %d, want %d", got, idx)
+	}
+
+	if err := node.MarkApplied(idx); err != nil {
+		t.Fatalf("MarkApplied(%d): %v", idx, err)
+	}
+	if got := node.LastApplied(); got != idx {
+		t.Fatalf("LastApplied = %d, want %d", got, idx)
 	}
 }
 

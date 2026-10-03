@@ -74,8 +74,15 @@ const (
 // actually reached storage. Scoping the ClientID to this node's own ID
 // makes every (ClientID, RequestID) pair this process can ever produce
 // unique across the whole cluster, for the lifetime of that node identity
-// (which is itself unique and stable -- see config.Config.NodeID),
-// closing the collision entirely.
+// (which is itself unique and stable -- see config.Config.NodeID).
+//
+// That node-ID scoping alone does not close the collision for a *restart*
+// of this same node, though: Raft's log (and therefore the state
+// machine's replayed dedup history for this exact ClientID) survives a
+// process restart on disk, while reqSeq -- an in-memory counter -- does
+// not; see Server.reqSeq's doc comment for why NewServer seeds it from
+// wall-clock time rather than zero, closing that second collision the
+// same way node-ID scoping closed the first.
 //
 // PUT and DELETE are themselves naturally idempotent at the KV level
 // (the last write for a key always wins; deleting an already-deleted key

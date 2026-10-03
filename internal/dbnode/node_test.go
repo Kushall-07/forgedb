@@ -58,13 +58,11 @@ func proposeOrFatal(t *testing.T, n *Node, cmd statemachine.Command) (index, ter
 // --- A. Single-node integration: PUT / DELETE through the actual Raft
 // commit boundary -------------------------------------------------------
 //
-// A literal one-node Raft cluster (zero peers) never advances its own
-// CommitIndex in this codebase's Raft implementation -- an existing,
-// documented limitation of internal/raft, not something Phase 8
-// introduces (see internal/raft/apply_test.go's commitUpTo comment). A
-// 3-node cluster's leader is used instead, exactly as Phase 7's own
+// A 3-node cluster's leader is used here, exactly as Phase 7's own
 // integration test already does; the point of this test is the
-// leader-through-commit-through-storage path, not the cluster size.
+// leader-through-commit-through-storage path, not the cluster size. See
+// TestNode_SingleNodeCluster_PutAndDeleteThroughCommit below for the
+// literal one-node (zero-peer) case.
 
 func TestNode_SingleLeader_PutAndDeleteThroughCommit(t *testing.T) {
 	_, nodes, _ := newCluster(t, 3)
@@ -87,6 +85,46 @@ func TestNode_SingleLeader_PutAndDeleteThroughCommit(t *testing.T) {
 	settleCommit(nodes)
 	if _, err := leader.ApplyAvailable(); err != nil {
 		t.Fatalf("ApplyAvailable: %v", err)
+	}
+	mustBeMissing(t, leader, "x")
+}
+
+// TestNode_SingleNodeCluster_PutAndDeleteThroughCommit covers the literal
+// one-node (zero-peer) cluster regression end to end: PUT and DELETE must
+// each commit (CommitIndex advances), apply (LastApplied advances), and
+// reach storage, exactly as they do with a 3-node cluster above, even
+// though there is no follower to replicate to or hear back from -- see
+// internal/raft/replication.go's broadcastAppendEntriesLocked, which now
+// re-checks the commit index itself once a Propose's AppendEntries round
+// has (vacuously) finished dispatching to zero peers.
+func TestNode_SingleNodeCluster_PutAndDeleteThroughCommit(t *testing.T) {
+	_, nodes, _ := newCluster(t, 1)
+	leader := nodes[0]
+	electLeader(t, leader)
+
+	putIdx, _ := proposeOrFatal(t, leader, statemachine.NewPutCommand("c1", 1, []byte("x"), []byte("10")))
+	if got := leader.Raft().CommitIndex(); got != putIdx {
+		t.Fatalf("after PUT: CommitIndex = %d, want %d", got, putIdx)
+	}
+	if _, err := leader.ApplyAvailable(); err != nil {
+		t.Fatalf("ApplyAvailable: %v", err)
+	}
+	if got := leader.Raft().LastApplied(); got != putIdx {
+		t.Fatalf("after PUT: LastApplied = %d, want %d", got, putIdx)
+	}
+	if got := mustGet(t, leader, "x"); got != "10" {
+		t.Fatalf("Get(x) = %q, want %q", got, "10")
+	}
+
+	delIdx, _ := proposeOrFatal(t, leader, statemachine.NewDeleteCommand("c1", 2, []byte("x")))
+	if got := leader.Raft().CommitIndex(); got != delIdx {
+		t.Fatalf("after DELETE: CommitIndex = %d, want %d", got, delIdx)
+	}
+	if _, err := leader.ApplyAvailable(); err != nil {
+		t.Fatalf("ApplyAvailable: %v", err)
+	}
+	if got := leader.Raft().LastApplied(); got != delIdx {
+		t.Fatalf("after DELETE: LastApplied = %d, want %d", got, delIdx)
 	}
 	mustBeMissing(t, leader, "x")
 }

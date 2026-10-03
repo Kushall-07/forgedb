@@ -44,6 +44,28 @@ type Server struct {
 	// client for deduplication purposes -- see kv.go's kvClientIDPrefix
 	// doc comment for why clientID must be derived from this node's own
 	// ID rather than a constant shared across every node in the cluster.
+	//
+	// reqSeq is seeded (see NewServer) from wall-clock time rather than
+	// left at its zero value: this exact ClientID's (ClientID, RequestID)
+	// history survives a restart of this node's process in Raft's
+	// persisted log, which the state machine replays into its dedup table
+	// on every startup (see docs/raft/phase7-state-machine.md), but reqSeq
+	// itself is only in-memory and would otherwise restart the sequence
+	// from 1 every time -- directly colliding with, and appearing *stale*
+	// against, RequestIDs this same ClientID already used in a prior
+	// process lifetime. A command the state machine resolves as stale
+	// (statemachine.ErrStaleRequest) is still a fully resolved, "applied"
+	// outcome from Raft's perspective (committed, LastApplied advances),
+	// so a caller that only waits on WaitApplied -- as proposeAndRespond
+	// does -- would otherwise see a silently dropped write reported as
+	// 200 OK, never reaching storage. Seeding from
+	// time.Now().UnixNano() instead makes a fresh Server's first
+	// RequestID astronomically likely to exceed every RequestID any
+	// previous instance of this same ClientID ever produced (nanosecond
+	// resolution against a request rate of, at most, thousands per
+	// second), closing this restart collision the same way scoping
+	// ClientID to the node's own ID already closes the equivalent
+	// cross-node collision at failover.
 	clientID string
 	reqSeq   atomic.Uint64
 }
@@ -66,6 +88,7 @@ func WithPeerHTTPAddrs(m map[string]string) Option {
 // Start.
 func NewServer(node *dbnode.Node, reg *metrics.Registry, opts ...Option) *Server {
 	s := &Server{node: node, registry: reg, clientID: kvClientIDPrefix + node.ID()}
+	s.reqSeq.Store(uint64(time.Now().UnixNano()))
 	for _, opt := range opts {
 		opt(s)
 	}

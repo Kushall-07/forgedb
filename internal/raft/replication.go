@@ -13,6 +13,13 @@ import (
 // heartbeat interval) and immediately from becomeLeaderLocked and
 // Propose, so new leadership and new entries both start replicating
 // without waiting for the next tick. n.mu must be held.
+//
+// With zero peers, the loop below does nothing -- there is no one to
+// replicate to -- so this also re-checks the commit index directly: for a
+// single-node cluster, the leader's own log entry already constitutes a
+// majority (majority() == 1), and nothing else would ever call
+// maybeAdvanceCommitIndexLocked, since that otherwise only happens from a
+// peer's AppendEntries/InstallSnapshot reply.
 func (n *Node) broadcastAppendEntriesLocked() {
 	term := n.currentTerm
 	leaderCommit := n.commitIndex
@@ -51,6 +58,8 @@ func (n *Node) broadcastAppendEntriesLocked() {
 			n.sendAppendEntries(peer, term, args)
 		})
 	}
+
+	n.maybeAdvanceCommitIndexLocked()
 }
 
 // sendInstallSnapshot sends a single InstallSnapshot RPC to peer and

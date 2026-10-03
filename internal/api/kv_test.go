@@ -15,6 +15,7 @@ import (
 	"github.com/Kushall-07/forgedb/internal/metrics"
 	"github.com/Kushall-07/forgedb/internal/raft"
 	"github.com/Kushall-07/forgedb/internal/statemachine"
+	"github.com/Kushall-07/forgedb/internal/storage"
 )
 
 // newRunningCluster opens a real 2-node dbnode cluster and deterministically
@@ -75,6 +76,43 @@ func newRunningCluster(t *testing.T) (leader, follower *dbnode.Node) {
 
 	n0.Run(5 * time.Millisecond)
 	return n0, n1
+}
+
+// newSingleNodeRunning opens a literal one-node (zero-peer) dbnode.Node --
+// the exact topology the live /kv regression this file's tests below
+// reproduce was found on (NODE_ID=node-1, no peers) -- elects it leader
+// deterministically (manual Tick/Drain; a zero-peer node never risks a
+// split vote, so no InMemoryTransport juggling is needed the way
+// newRunningCluster requires), then starts it the same way production
+// does (Run, driving both background ticking and the Applier).
+func newSingleNodeRunning(t *testing.T) *dbnode.Node {
+	t.Helper()
+	tr := raft.NewInMemoryTransport()
+	base := t.TempDir()
+
+	n, err := dbnode.Open(dbnode.Config{
+		ID:              "solo",
+		Transport:       tr,
+		RaftDir:         filepath.Join(base, "raft"),
+		KVDir:           filepath.Join(base, "kv"),
+		ElectionTickMin: 2,
+		ElectionTickMax: 2,
+		HeartbeatTick:   1,
+	})
+	if err != nil {
+		t.Fatalf("dbnode.Open: %v", err)
+	}
+	t.Cleanup(func() { n.Close() })
+
+	n.Tick()
+	n.Tick()
+	n.Drain()
+	if !n.IsLeader() {
+		t.Fatalf("single-node cluster did not elect itself leader")
+	}
+
+	n.Run(5 * time.Millisecond)
+	return n
 }
 
 func doKV(srv *Server, method, path string, body []byte) *httptest.ResponseRecorder {
@@ -276,5 +314,128 @@ func TestHandleAdminSnapshot_RejectsNonPost(t *testing.T) {
 	rr := doKV(srv, http.MethodGet, "/admin/snapshot", nil)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// --- Single-node /kv regression: committed+applied writes must actually
+// reach storage and be readable -----------------------------------------
+//
+// These reproduce a live defect found running a real single-node backend
+// (NODE_ID=node-1, no peers): PUT reported 200 OK, CommitIndex and
+// LastApplied both advanced, yet GET returned "key not found" for the
+// keys just written, and /cluster's memtable_entries stayed stuck at 1
+// despite multiple distinct successful-looking PUTs.
+//
+// The root cause is not the Raft commit path (already fixed separately
+// for the single-node/zero-peer case -- see internal/raft/replication.go)
+// and not any storage- or key-encoding bug: PUT and GET use the exact
+// same key bytes, the same storage.Store instance (dbnode.Node's n.store,
+// read directly by both ConsistentGet and Status/Stats -- see
+// internal/dbnode/node.go and observability.go), and there is no second
+// cache or store anywhere in the path.
+//
+// It is a (ClientID, RequestID) deduplication collision in
+// internal/statemachine.KVStateMachine.Apply: Server.reqSeq (internal/api)
+// is an in-memory counter that restarts at zero every time a new Server
+// is constructed (in production, every process restart), but Raft's
+// persisted log -- and therefore this exact ClientID's dedup history,
+// rebuilt by replaying that log into the state machine on every startup,
+// since LastApplied is deliberately never persisted (see
+// internal/raft/apply.go) -- survives across that same restart. A
+// post-restart RequestID of 1 reads as *stale* (lower than this
+// ClientID's last pre-restart RequestID), which the state machine
+// resolves deterministically and "applies" (Raft considers the entry
+// fully committed and applied -- correctly, per its own contract) without
+// ever calling Store.Put/Delete. proposeAndRespond (kv.go) only waits for
+// WaitApplied to confirm the entry's Raft index was applied; it has no
+// way to see that the *logical* outcome was ErrStaleRequest rather than a
+// real mutation, so it reports 200 OK regardless. The fix (Server.reqSeq's
+// doc comment, NewServer) seeds reqSeq from wall-clock time instead of
+// zero, so a fresh Server's RequestIDs are (for any realistic request
+// rate) always higher than anything this ClientID used in a previous
+// process lifetime -- closing this collision the same way scoping
+// ClientID to the node's own ID already closes the analogous cross-node
+// collision at failover (see TestClientID_UniquePerNode_PreventsCrossNodeDedupCollision
+// above).
+
+// TestKV_RestartDoesNotCollideRequestIDWithPriorHistory is the direct
+// repro: it commits a long run of prior writes under one Server's
+// clientID (standing in for "this node's own prior process lifetime"),
+// then constructs a brand new Server over the *same* node -- the exact
+// shape of a real process restart, since dbnode.Node (and the Raft log
+// backing it) is what actually persists, while a Server is recreated from
+// scratch -- and checks that a write through the new Server still reaches
+// storage instead of being silently resolved as stale.
+func TestKV_RestartDoesNotCollideRequestIDWithPriorHistory(t *testing.T) {
+	node := newSingleNodeRunning(t)
+	srv1 := NewServer(node, metrics.NewRegistry())
+
+	for i := uint64(1); i <= 20; i++ {
+		idx, _, err := node.Propose(statemachine.NewPutCommand(srv1.clientID, i, []byte("warmup"), []byte("x")))
+		if err != nil {
+			t.Fatalf("Propose warmup #%d: %v", i, err)
+		}
+		if err := node.WaitApplied(context.Background(), idx); err != nil {
+			t.Fatalf("WaitApplied warmup #%d: %v", i, err)
+		}
+	}
+
+	srv2 := NewServer(node, metrics.NewRegistry())
+	if srv2.clientID != srv1.clientID {
+		t.Fatalf("clientID changed across the simulated restart: %q vs %q -- this test no longer reproduces the real scenario", srv1.clientID, srv2.clientID)
+	}
+
+	if rr := doKV(srv2, http.MethodPut, "/kv/after-restart", []byte("hello")); rr.Code != http.StatusOK {
+		t.Fatalf("PUT after restart status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	rr := doKV(srv2, http.MethodGet, "/kv/after-restart", nil)
+	if rr.Code != http.StatusOK || rr.Body.String() != "hello" {
+		t.Fatalf("GET after restart: status=%d body=%q, want 200 %q -- the write was silently dropped as a stale duplicate of this ClientID's pre-restart RequestID history", rr.Code, rr.Body.String(), "hello")
+	}
+}
+
+// TestHandleKV_SingleNodeCluster_MultipleKeysRemainReadable is the
+// end-to-end live repro: a true one-node (zero-peer) cluster, driven
+// through the real HTTP handlers exactly as the live bug report was,
+// writing two distinct keys and confirming both -- not just the last one
+// written -- are independently readable, that storage's live entry count
+// reflects both, and that a DELETE removes exactly the deleted key.
+func TestHandleKV_SingleNodeCluster_MultipleKeysRemainReadable(t *testing.T) {
+	node := newSingleNodeRunning(t)
+	srv := NewServer(node, metrics.NewRegistry())
+
+	if rr := doKV(srv, http.MethodPut, "/kv/test:dashboard", []byte("hello-forgedb")); rr.Code != http.StatusOK {
+		t.Fatalf("PUT test:dashboard status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if rr := doKV(srv, http.MethodPut, "/kv/testkey", []byte("hello")); rr.Code != http.StatusOK {
+		t.Fatalf("PUT testkey status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	if rr := doKV(srv, http.MethodGet, "/kv/test:dashboard", nil); rr.Code != http.StatusOK || rr.Body.String() != "hello-forgedb" {
+		t.Fatalf("GET test:dashboard: status=%d body=%q, want 200 %q", rr.Code, rr.Body.String(), "hello-forgedb")
+	}
+	if rr := doKV(srv, http.MethodGet, "/kv/testkey", nil); rr.Code != http.StatusOK || rr.Body.String() != "hello" {
+		t.Fatalf("GET testkey: status=%d body=%q, want 200 %q", rr.Code, rr.Body.String(), "hello")
+	}
+
+	ms, ok := node.Store().(*storage.MemStore)
+	if !ok {
+		t.Fatalf("node.Store() is not a *storage.MemStore")
+	}
+	if got := ms.Stats().MemTableEntries; got != 2 {
+		t.Fatalf("MemTableEntries = %d, want 2 after two distinct live PUTs", got)
+	}
+
+	if rr := doKV(srv, http.MethodDelete, "/kv/testkey", nil); rr.Code != http.StatusOK {
+		t.Fatalf("DELETE testkey status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if rr := doKV(srv, http.MethodGet, "/kv/testkey", nil); rr.Code != http.StatusNotFound {
+		t.Fatalf("GET testkey after DELETE: status = %d, want 404", rr.Code)
+	}
+	if rr := doKV(srv, http.MethodGet, "/kv/test:dashboard", nil); rr.Code != http.StatusOK || rr.Body.String() != "hello-forgedb" {
+		t.Fatalf("GET test:dashboard after deleting testkey: status=%d body=%q, want 200 %q (DELETE must not touch other keys)", rr.Code, rr.Body.String(), "hello-forgedb")
+	}
+	if got := ms.Stats().MemTableEntries; got != 1 {
+		t.Fatalf("MemTableEntries = %d, want 1 after deleting one of two live keys", got)
 	}
 }

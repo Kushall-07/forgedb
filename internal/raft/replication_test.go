@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -289,6 +290,68 @@ func TestNode_MajorityCommit(t *testing.T) {
 	entries := leader.CommittedEntries(1)
 	if len(entries) != 1 || !bytes.Equal(entries[0].Command, Command("cmd")) {
 		t.Fatalf("CommittedEntries = %+v", entries)
+	}
+}
+
+// --- 18b. Single-node cluster: majority-of-one commits without any peer ----
+//
+// A cluster with zero peers has nobody to reply to an AppendEntries RPC, so
+// maybeAdvanceCommitIndexLocked can never be reached via sendAppendEntries/
+// sendInstallSnapshot the way a multi-node cluster reaches it. These tests
+// cover the fix: broadcastAppendEntriesLocked itself re-checks the commit
+// index once it has dispatched (nothing, in the zero-peer case) to every
+// peer, so the leader's own log entry -- already a majority of one, per
+// majority() -- commits immediately instead of staying stuck at 0 forever.
+
+func TestNode_SingleNodeCluster_CommitsImmediately(t *testing.T) {
+	tr := NewInMemoryTransport()
+	node := mustNewNode(t, Options{ID: "solo", Transport: tr, ElectionTickMin: 2, ElectionTickMax: 2})
+	tr.Register("solo", node)
+
+	node.Tick()
+	node.Tick()
+	node.Drain()
+	if !node.IsLeader() {
+		t.Fatalf("single-node cluster did not elect itself leader")
+	}
+
+	idx, _, err := node.Propose(Command("cmd"))
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+
+	if got := node.CommitIndex(); got != idx {
+		t.Fatalf("CommitIndex = %d, want %d (a single node is its own majority)", got, idx)
+	}
+	entries := node.CommittedEntries(1)
+	if len(entries) != 1 || !bytes.Equal(entries[0].Command, Command("cmd")) {
+		t.Fatalf("CommittedEntries = %+v", entries)
+	}
+}
+
+func TestNode_SingleNodeCluster_CommitIndexAdvancesAcrossMultipleProposals(t *testing.T) {
+	tr := NewInMemoryTransport()
+	node := mustNewNode(t, Options{ID: "solo", Transport: tr, ElectionTickMin: 2, ElectionTickMax: 2})
+	tr.Register("solo", node)
+
+	node.Tick()
+	node.Tick()
+	node.Drain()
+	if !node.IsLeader() {
+		t.Fatalf("single-node cluster did not elect itself leader")
+	}
+
+	for i := 1; i <= 3; i++ {
+		idx, _, err := node.Propose(Command(fmt.Sprintf("cmd-%d", i)))
+		if err != nil {
+			t.Fatalf("Propose #%d: %v", i, err)
+		}
+		if got := node.CommitIndex(); got != idx {
+			t.Fatalf("after proposal #%d: CommitIndex = %d, want %d", i, got, idx)
+		}
+	}
+	if got := node.CommitIndex(); got != 3 {
+		t.Fatalf("final CommitIndex = %d, want 3", got)
 	}
 }
 
