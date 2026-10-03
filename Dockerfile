@@ -20,14 +20,18 @@ COPY . .
 
 # CGO_ENABLED=0 produces a statically linked binary with no libc
 # dependency, which is what lets the runtime stage below be as small and
-# dependency-free as it is. Both cmd/forgedb (the server) and
-# cmd/forge-client (the CLI client) are built, since the same image is
-# convenient for ad hoc client use (e.g. `docker run --rm --network
-# forgedb-net forgedb:latest forge-client ...`) without pulling a second
+# dependency-free as it is. cmd/forgedb (the server), cmd/forge-client
+# (the CLI client), and cmd/forge-gateway (the leader-aware HTTP
+# reverse proxy -- see internal/gateway's package doc comment) are all
+# built, since the same image is convenient for ad hoc client use (e.g.
+# `docker run --rm --network forgedb-net forgedb:latest forge-client
+# ...`) and for running the gateway as its own container (see
+# docker-compose.yml's forge-gateway service) without pulling a second
 # image.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/forgedb ./cmd/forgedb && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/forge-client ./cmd/forge-client
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/forge-client ./cmd/forge-client && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/forge-gateway ./cmd/forge-gateway
 
 # ---- runtime ------------------------------------------------------------
 FROM alpine:3.20
@@ -44,6 +48,7 @@ RUN apk add --no-cache ca-certificates curl && \
 
 COPY --from=builder /out/forgedb /usr/local/bin/forgedb
 COPY --from=builder /out/forge-client /usr/local/bin/forge-client
+COPY --from=builder /out/forge-gateway /usr/local/bin/forge-gateway
 
 USER forgedb
 WORKDIR /home/forgedb

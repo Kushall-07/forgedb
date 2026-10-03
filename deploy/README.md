@@ -68,8 +68,9 @@ host-published ports:
 | forgedb-1  | 8081      | 9091      | 8080 / 9090         |
 | forgedb-2  | 8082      | 9092      | 8080 / 9090         |
 | forgedb-3  | 8083      | 9093      | 8080 / 9090         |
+| forge-gateway | 8090   | --        | 8090 (`GATEWAY_ADDR`) |
 
-All three share one `PEERS` roster and one Docker network
+All three nodes share one `PEERS` roster and one Docker network
 (`forgedb-net`); every node addresses its peers by Compose service name
 (`forgedb-1`, `forgedb-2`, `forgedb-3`), never by `localhost` or a
 hard-coded IP -- see the deployment doc's network section for why that
@@ -115,7 +116,40 @@ after startup). Example (abbreviated):
 ```
 
 You do not need to find the leader yourself to use `forge-client` --
-see the next section.
+see the next section. You also do not need to find the leader yourself
+when going through `forge-gateway` -- see
+[Section 5a](#5a-leader-aware-public-routing-forge-gateway) below.
+
+### 5a. Leader-aware public routing (forge-gateway)
+
+A fourth container, `forge-gateway`, runs alongside the three nodes
+(see `docker-compose.yml`'s `forge-gateway` service and
+[`docs/deployment/phase15-leader-aware-gateway.md`](../docs/deployment/phase15-leader-aware-gateway.md)
+for the full design writeup). It is a small, persistent reverse proxy
+that forwards every request it receives to whichever node currently
+claims to be the Raft leader, following that node's own 421
+`leader_http` hint (see Section 6 below) when it's wrong, and only ever
+answering the caller once some node has actually accepted the request.
+It never validates or inspects the `Authorization` header itself --
+every protected endpoint's authentication still happens exactly as
+before, inside whichever node ultimately answers.
+
+```sh
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" -X PUT --data-binary "hello world" http://localhost:8090/kv/greeting
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8090/kv/greeting
+```
+
+This is what a public entrypoint (Caddy, behind Cloudflare) should
+point at instead of any single `forgedb-N` node -- see
+[`deploy/Caddyfile.example`](Caddyfile.example). `forge-gateway`'s own
+address never needs to change when leadership moves, unlike pointing
+Caddy directly at a node.
+
+If every node currently reports it is not the leader and gives no usable
+hint (e.g. mid-election), `forge-gateway` returns an explicit
+`503 {"error":"no_leader_available"}` rather than guessing -- retry
+shortly. If no node can be reached at all, it returns
+`502 {"error":"no_backend_reachable"}`.
 
 ## 6. Sending a PUT / GET / DELETE
 
@@ -210,12 +244,31 @@ merely unreachable.
 docker stop forgedb-1
 # 3. poll the remaining nodes' /cluster until a new LeaderID appears
 curl http://localhost:8082/cluster
-# 4. issue a write against the new leader (or just use forge-client,
-#    which finds it automatically)
+# 4. issue a write against the new leader (or just use forge-client or
+#    forge-gateway, either of which find it automatically)
 # 5. restart the old leader and confirm it rejoins as a follower and
 #    converges
 docker start forgedb-1
 ```
+
+### Leader crash and failover through the public entrypoint
+
+The scenario above requires the operator to notice the new leader. The
+point of `forge-gateway` (see [Section 5a](#5a-leader-aware-public-routing-forge-gateway))
+is that a client never has to:
+
+```sh
+# Write before the failure, through the SAME endpoint both times:
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" -X PUT --data-binary "v1" http://localhost:8090/kv/k
+
+# Find and stop the current leader (step 5 / docker stop <leader>),
+# wait a moment for the election, then write again -- same URL:
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" -X PUT --data-binary "v2" http://localhost:8090/kv/k
+curl -H "Authorization: Bearer $FORGEDB_API_TOKEN" http://localhost:8090/kv/k   # -> v2
+```
+
+Both requests go to `http://localhost:8090`, regardless of which node
+is leader at the time.
 
 ### Real network partition (not a crash)
 

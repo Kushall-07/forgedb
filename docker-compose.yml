@@ -94,6 +94,45 @@ services:
       - forgedb-net
     restart: unless-stopped
 
+  # forge-gateway is the public HTTP entrypoint's stable, leader-aware
+  # target: a small reverse proxy (internal/gateway) that forwards every
+  # request to whichever node currently identifies itself as the Raft
+  # leader, following that node's own not-leader hint when it isn't --
+  # see docs/deployment/phase15-leader-aware-gateway.md. Point Caddy's
+  # upstream at forge-gateway:8090 (see deploy/Caddyfile.example)
+  # instead of any single forgedb-N node, so a leader election never
+  # requires editing the public-facing proxy's configuration.
+  #
+  # It deliberately gets neither FORGEDB_API_TOKEN nor any other secret:
+  # it forwards whatever Authorization header a client already sent,
+  # unchanged, straight through to whichever node answers -- that node's
+  # own authMiddleware (internal/api/auth.go) is still the only thing
+  # that ever validates it.
+  forge-gateway:
+    build: .
+    image: forgedb:latest
+    container_name: forge-gateway
+    hostname: forge-gateway
+    entrypoint: ["forge-gateway"]
+    environment:
+      <<: [*peers]
+      GATEWAY_ADDR: 0.0.0.0:8090
+    ports:
+      - "8090:8090"
+    networks:
+      - forgedb-net
+    depends_on:
+      - forgedb-1
+      - forgedb-2
+      - forgedb-3
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+
 networks:
   forgedb-net:
     driver: bridge

@@ -1,0 +1,51 @@
+# Example Caddy configuration for ForgeDB's public HTTP entrypoint. See
+# docs/deployment/phase15-leader-aware-gateway.md for the full design
+# writeup of why this file looks the way it does.
+#
+# THE PROBLEM THIS FILE FIXES
+#
+# Pointing Caddy straight at one ForgeDB node's address pins every
+# public request to whichever node happened to be leader when this file
+# was written:
+#
+#   example.com {
+#       reverse_proxy forgedb-2:8080
+#   }
+#
+# Raft leadership moves on failure/election; Caddy has no way to notice
+# -- a 421 Misdirected Request is a perfectly valid HTTP response as far
+# as Caddy is concerned, not a backend failure, so Caddy's own passive
+# health checks never react to it, and Caddy has no way to parse the
+# response body's leader_http hint (see internal/api/kv.go) and retry
+# elsewhere even if it wanted to. Every write and linearizable read
+# starts failing with 421 the moment that node stops being leader, until
+# an operator manually edits this file to point at the new one.
+#
+# THE FIX
+#
+# Point Caddy at forge-gateway instead of any single node.
+# forge-gateway (cmd/forge-gateway / internal/gateway) is a small,
+# persistent reverse proxy that already speaks the not-leader hint
+# protocol every ForgeDB node answers with -- it forwards each request
+# to whichever node currently claims to be leader, follows that node's
+# hint when it is wrong, and only answers the client once a node has
+# actually accepted the request. forge-gateway's own address never
+# changes across a Raft election -- only which node it is currently
+# forwarding to does -- so this file never needs to change when
+# leadership moves.
+#
+# Replace "example.com" with your real domain; do not hardcode a real
+# production address in a tracked file (see .env.example's own note on
+# secrets -- the same principle applies to deployment-specific hostnames).
+example.com {
+	reverse_proxy forge-gateway:8090
+}
+
+# forge-gateway forwards Authorization headers unchanged and does not
+# itself require FORGEDB_API_TOKEN (see docker-compose.yml's
+# forge-gateway service) -- every protected endpoint's authentication is
+# still enforced exactly as before, inside whichever ForgeDB node
+# ultimately answers (see internal/api/auth.go). Caddy's own TLS
+# termination (or a Cloudflare Tunnel in front of it) is unaffected by
+# this change: only the reverse_proxy upstream target changed, from a
+# specific node to the stable gateway address.
