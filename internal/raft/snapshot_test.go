@@ -2,6 +2,8 @@ package raft
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -225,6 +227,66 @@ func TestNewNode_RestartWithSnapshotAndSuffix_DropsOverlapNoGap(t *testing.T) {
 	e4, ok := restarted.log.EntryAt(4)
 	if !ok || string(e4.Command) != "after-snapshot" {
 		t.Fatalf("EntryAt(4) after restart = %+v, %v, want after-snapshot", e4, ok)
+	}
+}
+
+// --- Recovery must never silently accept corrupted/partial snapshot data --
+
+// TestNewNode_CorruptedSnapshotFile_FailsClosed proves that a snapshot file
+// damaged after it was durably written (bit rot, a tampered file, a restore
+// from an inconsistent backup -- anything other than the write path this
+// package itself controls, which is already covered by the crash-window
+// tests above) causes NewNode to fail outright via the checksum check in
+// decodeSnapshot, rather than silently discarding the corruption and either
+// starting fresh (forgetting a boundary this node had already promised to
+// remember) or proceeding with truncated/garbage Data. See
+// docs/raft/phase9-snapshots.md and
+// docs/deployment/phase18-snapshot-robustness.md.
+func TestNewNode_CorruptedSnapshotFile_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "raft-state")
+	persister := NewFilePersister(path)
+
+	if err := persister.SaveState(PersistentState{CurrentTerm: 1}); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	if err := persister.SaveSnapshot(Snapshot{LastIncludedIndex: 3, LastIncludedTerm: 1, Data: []byte("state-through-3")}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	snapPath := path + snapshotFileSuffix
+	data, err := os.ReadFile(snapPath)
+	if err != nil {
+		t.Fatalf("read snapshot file: %v", err)
+	}
+	data[len(data)/2] ^= 0xFF
+	if err := os.WriteFile(snapPath, data, 0o644); err != nil {
+		t.Fatalf("write corrupted snapshot file: %v", err)
+	}
+
+	if _, err := NewNode(Options{ID: "node0", Peers: []string{"node1"}, Transport: NewInMemoryTransport(), Persister: persister}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("NewNode with a corrupted on-disk snapshot file = %v, want a wrapped ErrCorrupt", err)
+	}
+}
+
+// TestNewNode_PersistedLogGapAfterSnapshotBoundary_Rejected proves the
+// defense-in-depth gap check in NewNode (raft.go): a persisted log whose
+// retained suffix does not begin exactly one past the snapshot boundary --
+// which this package's own CreateSnapshot/HandleInstallSnapshot write
+// ordering should never itself produce, but which NewNode checks explicitly
+// rather than trusting -- fails closed with a wrapped ErrCorrupt instead of
+// silently applying entries with a missing prefix.
+func TestNewNode_PersistedLogGapAfterSnapshotBoundary_Rejected(t *testing.T) {
+	persister := NewMemoryPersister()
+	if err := persister.SaveState(PersistentState{CurrentTerm: 1, Log: []LogEntry{{Index: 4, Term: 1, Command: Command("after-gap")}}}); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	if err := persister.SaveSnapshot(Snapshot{LastIncludedIndex: 2, LastIncludedTerm: 1, Data: []byte("x")}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	if _, err := NewNode(Options{ID: "node0", Peers: []string{"node1"}, Transport: NewInMemoryTransport(), Persister: persister}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("NewNode with a gap between the snapshot boundary and the first retained log entry = %v, want a wrapped ErrCorrupt", err)
 	}
 }
 

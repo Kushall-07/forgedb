@@ -7,6 +7,9 @@ package dbnode
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -413,5 +416,111 @@ func TestNode_FullClusterRestart_AfterSnapshot_Converges(t *testing.T) {
 		if got := mustGet(t, n, "marker"); got != "post-restart" {
 			t.Fatalf("node %s Get(marker) after post-restart proposal = %q, want post-restart", n.ID(), got)
 		}
+	}
+}
+
+// --- Recovery must never silently accept a corrupted/partial snapshot ------
+
+// TestNode_RestartWithCorruptedSnapshotFile_FailsClosed proves the same
+// fail-closed guarantee internal/raft's own unit tests establish
+// (TestNewNode_CorruptedSnapshotFile_FailsClosed), but end to end through
+// the real dbnode.Open composition root and a real FilePersister-backed
+// snapshot file on disk: damage to the persisted ".snapshot" file after a
+// clean Close (bit rot, a tampered file, a bad restore -- anything other
+// than this package's own write path, which the crash-window tests already
+// cover) must cause Open to fail outright, never start the node with a
+// silently discarded or partially-applied snapshot.
+func TestNode_RestartWithCorruptedSnapshotFile_FailsClosed(t *testing.T) {
+	tr, nodes, dirs := newCluster(t, 3)
+	leader := nodes[0]
+	electLeader(t, leader)
+
+	proposeOrFatal(t, leader, statemachine.NewPutCommand("c1", 1, []byte("x"), []byte("10")))
+	settleCommit(nodes)
+	applyAllAvailable(t, nodes)
+
+	follower := nodes[1]
+	followerDir := dirs[1]
+	if err := follower.CreateSnapshot(1); err != nil {
+		t.Fatalf("CreateSnapshot(1): %v", err)
+	}
+	if err := follower.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	snapPath := filepath.Join(followerDir.raftDir, raftStateFileName+".snapshot")
+	data, err := os.ReadFile(snapPath)
+	if err != nil {
+		t.Fatalf("read snapshot file: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("snapshot file %s is empty", snapPath)
+	}
+	data[len(data)/2] ^= 0xFF
+	if err := os.WriteFile(snapPath, data, 0o644); err != nil {
+		t.Fatalf("write corrupted snapshot file: %v", err)
+	}
+
+	ids := clusterIDs(3)
+	if _, err := Open(newNodeConfig(follower.ID(), peersOf(ids, follower.ID()), tr, followerDir)); err == nil {
+		t.Fatalf("Open with a corrupted on-disk snapshot file: want error, got nil")
+	}
+}
+
+// --- Repeated snapshot/recovery cycles remain safe --------------------------
+
+// TestNode_RepeatedSnapshotRestartCycles_StateCorrect drives several
+// successive generations of write -> snapshot -> restart against the same
+// node, proving each cycle's restart recovers exactly the cumulative state
+// so far -- not just that a single snapshot-then-restart works (the other
+// tests in this file), but that doing it repeatedly against the same
+// on-disk files never accumulates corruption, loses previously-snapshotted
+// keys, or regresses the snapshot boundary.
+func TestNode_RepeatedSnapshotRestartCycles_StateCorrect(t *testing.T) {
+	tr, nodes, dirs := newCluster(t, 3)
+	leader := nodes[0]
+	electLeader(t, leader)
+
+	ids := clusterIDs(3)
+	const followerIdx = 1
+	follower := nodes[followerIdx]
+	followerDir := dirs[followerIdx]
+
+	const cycles = 3
+	for cycle := 0; cycle < cycles; cycle++ {
+		key := fmt.Sprintf("k%d", cycle)
+		val := fmt.Sprintf("v%d", cycle)
+		proposeOrFatal(t, leader, statemachine.NewPutCommand("c1", uint64(cycle+1), []byte(key), []byte(val)))
+		nodes[followerIdx] = follower
+		settleCommit(nodes)
+		applyAllAvailable(t, nodes)
+
+		lastApplied := follower.Raft().LastApplied()
+		if err := follower.CreateSnapshot(lastApplied); err != nil {
+			t.Fatalf("cycle %d: CreateSnapshot(%d): %v", cycle, lastApplied, err)
+		}
+		if err := follower.Close(); err != nil {
+			t.Fatalf("cycle %d: Close: %v", cycle, err)
+		}
+
+		reopened, err := Open(newNodeConfig(follower.ID(), peersOf(ids, follower.ID()), tr, followerDir))
+		if err != nil {
+			t.Fatalf("cycle %d: reopen: %v", cycle, err)
+		}
+		t.Cleanup(func() { reopened.Close() })
+
+		if got := reopened.SnapshotIndex(); got != lastApplied {
+			t.Fatalf("cycle %d: SnapshotIndex after restart = %d, want %d", cycle, got, lastApplied)
+		}
+		for c := 0; c <= cycle; c++ {
+			wantKey := fmt.Sprintf("k%d", c)
+			wantVal := fmt.Sprintf("v%d", c)
+			if got := mustGet(t, reopened, wantKey); got != wantVal {
+				t.Fatalf("cycle %d: Get(%s) after restart = %q, want %q (state from an earlier cycle was lost)", cycle, wantKey, got, wantVal)
+			}
+		}
+
+		follower = reopened
+		nodes[followerIdx] = reopened
 	}
 }
