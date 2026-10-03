@@ -78,6 +78,24 @@ type Server struct {
 	// from the apiToken parameter -- never re-read from the environment
 	// per request -- and is never logged or exposed in any response.
 	apiToken string
+
+	// maxValueBytes bounds a /kv PUT request body (see kv.go's
+	// handleKVPut). Defaults to DefaultMaxValueBytes; override with
+	// WithMaxValueBytes (normally from config.Config.MaxValueBytes).
+	maxValueBytes int64
+
+	// corsOrigins is the exact set of browser Origins (see cors.go)
+	// allowed to read a cross-origin response from this server -- e.g.
+	// a dashboard deployed on its own domain, separate from the public
+	// API edge. Empty (the default) means no Origin is allowed, which
+	// is this package's pre-Phase-13 behavior: no CORS headers are ever
+	// added, and only same-origin or non-browser callers (curl,
+	// forge-client, forge-gateway) can read a response. Set with
+	// WithCORSOrigins, normally from config.Config.CORSOrigins
+	// (FORGEDB_CORS_ORIGINS). This is never a substitute for
+	// authMiddleware -- it only controls whether a *browser* is allowed
+	// to read a response; authentication is unaffected and unchanged.
+	corsOrigins []string
 }
 
 // Option configures optional Server behavior. See WithPeerHTTPAddrs.
@@ -90,6 +108,27 @@ type Option func(*Server)
 // still returned) -- it is not required for correctness.
 func WithPeerHTTPAddrs(m map[string]string) Option {
 	return func(s *Server) { s.peerHTTP = m }
+}
+
+// WithMaxValueBytes overrides the default /kv PUT body size limit
+// (DefaultMaxValueBytes). n must be positive -- a value <= 0 is ignored
+// and the default (or a previously applied option) is kept, since this
+// is a safety bound that must never silently become "unlimited."
+func WithMaxValueBytes(n int64) Option {
+	return func(s *Server) {
+		if n > 0 {
+			s.maxValueBytes = n
+		}
+	}
+}
+
+// WithCORSOrigins sets the exact list of browser Origins allowed to
+// read a cross-origin response from this server (see cors.go and
+// Server.corsOrigins's doc comment). A nil or empty slice -- the
+// default -- disables CORS entirely: no Access-Control-* headers are
+// ever added, matching this package's pre-Phase-13 behavior.
+func WithCORSOrigins(origins []string) Option {
+	return func(s *Server) { s.corsOrigins = origins }
 }
 
 // NewServer returns a Server exposing node's diagnostic state through
@@ -110,25 +149,34 @@ func WithPeerHTTPAddrs(m map[string]string) Option {
 //	GET/PUT/DELETE /kv/{key} protected
 //	POST /admin/snapshot   protected
 func NewServer(node *dbnode.Node, reg *metrics.Registry, apiToken string, opts ...Option) *Server {
-	s := &Server{node: node, registry: reg, clientID: kvClientIDPrefix + node.ID(), apiToken: apiToken}
+	s := &Server{node: node, registry: reg, clientID: kvClientIDPrefix + node.ID(), apiToken: apiToken, maxValueBytes: DefaultMaxValueBytes}
 	s.reqSeq.Store(uint64(time.Now().UnixNano()))
 	for _, opt := range opts {
 		opt(s)
 	}
 
 	mux := http.NewServeMux()
+	// Every route is wrapped in s.cors (see cors.go) outermost, so a
+	// browser's CORS preflight (an OPTIONS request, which never carries
+	// the dashboard's Authorization header -- that is the whole point of
+	// a preflight) is answered before authMiddleware ever runs. cors
+	// itself only ever adds response headers or short-circuits an
+	// OPTIONS request; it never rejects a non-OPTIONS request, so it
+	// changes nothing about who is authenticated or what a GET/PUT/
+	// DELETE/POST request returns -- see cors.go's package doc comment.
+	//
 	// /health and /ready are deliberately never wrapped in authMiddleware
 	// -- see auth.go's doc comment for why.
-	mux.Handle("/health", s.instrument("/health", readOnly(s.handleHealth)))
-	mux.Handle("/ready", s.instrument("/ready", readOnly(s.handleReady)))
+	mux.Handle("/health", s.cors(s.instrument("/health", readOnly(s.handleHealth))))
+	mux.Handle("/ready", s.cors(s.instrument("/ready", readOnly(s.handleReady))))
 	// Every other route requires authentication. authMiddleware wraps
 	// instrument (never the reverse), so a failed auth check returns 401
 	// before instrument's logging/metrics recording, and well before the
 	// underlying handler, ever run.
-	mux.Handle("/metrics", authMiddleware(s.apiToken, s.instrument("/metrics", readOnly(s.handleMetrics))))
-	mux.Handle("/cluster", authMiddleware(s.apiToken, s.instrument("/cluster", readOnly(s.handleCluster))))
-	mux.Handle("/kv/", authMiddleware(s.apiToken, s.instrument("/kv", s.handleKV)))
-	mux.Handle("/admin/snapshot", authMiddleware(s.apiToken, s.instrument("/admin/snapshot", s.handleAdminSnapshot)))
+	mux.Handle("/metrics", s.cors(authMiddleware(s.apiToken, s.instrument("/metrics", readOnly(s.handleMetrics)))))
+	mux.Handle("/cluster", s.cors(authMiddleware(s.apiToken, s.instrument("/cluster", readOnly(s.handleCluster)))))
+	mux.Handle("/kv/", s.cors(authMiddleware(s.apiToken, s.instrument("/kv", s.handleKV))))
+	mux.Handle("/admin/snapshot", s.cors(authMiddleware(s.apiToken, s.instrument("/admin/snapshot", s.handleAdminSnapshot))))
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s

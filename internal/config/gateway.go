@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +19,18 @@ const EnvGatewayAddr = "GATEWAY_ADDR"
 
 // DefaultGatewayAddr is used when GATEWAY_ADDR is unset or empty.
 const DefaultGatewayAddr = ":8090"
+
+// EnvGatewayMaxBodyBytes names the environment variable LoadGateway
+// reads GatewayConfig.MaxBodyBytes from. Empty/unset defaults to
+// DefaultGatewayMaxBodyBytes.
+const EnvGatewayMaxBodyBytes = "GATEWAY_MAX_BODY_BYTES"
+
+// DefaultGatewayMaxBodyBytes is used when GatewayConfig.MaxBodyBytes
+// is left zero (i.e. GATEWAY_MAX_BODY_BYTES is unset). It matches
+// internal/gateway.DefaultMaxBodyBytes -- see
+// Config.DefaultMaxValueBytes's doc comment for why this value is
+// duplicated rather than imported across packages.
+const DefaultGatewayMaxBodyBytes = 4 << 20 // 4 MiB
 
 // GatewayConfig configures cmd/forge-gateway: a small, leader-following
 // HTTP reverse proxy (internal/gateway) that sits in front of a
@@ -40,6 +53,14 @@ type GatewayConfig struct {
 	// value every node in the cluster already has, rather than
 	// inventing a second, separate way to describe the same roster.
 	Backends []string
+
+	// MaxBodyBytes bounds how much of an incoming request body
+	// internal/gateway.Proxy buffers in memory (see that package's own
+	// DefaultMaxBodyBytes, which this overrides via
+	// gateway.WithMaxBodyBytes). LoadGateway reads it from
+	// GATEWAY_MAX_BODY_BYTES and defaults it to
+	// DefaultGatewayMaxBodyBytes when unset.
+	MaxBodyBytes int64
 }
 
 // LoadGateway builds a GatewayConfig from the environment: GATEWAY_ADDR
@@ -50,9 +71,20 @@ type GatewayConfig struct {
 // "fail fast rather than start partially configured" rule Load's own
 // Validate already applies to a ForgeDB node.
 func LoadGateway() (GatewayConfig, error) {
-	cfg := GatewayConfig{Addr: getenvDefault(EnvGatewayAddr, DefaultGatewayAddr)}
+	cfg := GatewayConfig{Addr: getenvDefault(EnvGatewayAddr, DefaultGatewayAddr), MaxBodyBytes: DefaultGatewayMaxBodyBytes}
 	if cfg.Addr == "" {
 		return GatewayConfig{}, errors.New("config: GATEWAY_ADDR must not be empty")
+	}
+
+	if v := os.Getenv(EnvGatewayMaxBodyBytes); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return GatewayConfig{}, fmt.Errorf("config: invalid %s %q: %w", EnvGatewayMaxBodyBytes, v, err)
+		}
+		if n <= 0 {
+			return GatewayConfig{}, fmt.Errorf("config: %s must be a positive number of bytes, got %d", EnvGatewayMaxBodyBytes, n)
+		}
+		cfg.MaxBodyBytes = n
 	}
 
 	peers, err := ParsePeers(os.Getenv(EnvPeers))

@@ -40,14 +40,17 @@ import (
 	"time"
 )
 
-// maxBodyBytes bounds how much of an incoming request body Proxy
-// buffers in memory in order to be able to retry it against more than
-// one backend (an http.Request body is a single-use stream). It is
-// intentionally larger than internal/api's own maxValueBytes (1 MiB) so
-// that a request already within that node-side limit is never rejected
-// here first; an oversized body still gets a clear, explicit 413 from
-// Proxy itself rather than an obscure downstream failure.
-const maxBodyBytes = 4 << 20 // 4 MiB
+// DefaultMaxBodyBytes bounds how much of an incoming request body
+// Proxy buffers in memory in order to be able to retry it against more
+// than one backend (an http.Request body is a single-use stream), when
+// Proxy is not given an explicit WithMaxBodyBytes option. It is
+// intentionally larger than internal/api's own DefaultMaxValueBytes (1
+// MiB) so that a request already within that node-side limit is never
+// rejected here first; an oversized body still gets a clear, explicit
+// 413 from Proxy itself rather than an obscure downstream failure.
+// Phase 13 makes this configurable (see config.GatewayConfig.MaxBodyBytes
+// / WithMaxBodyBytes) without changing this default.
+const DefaultMaxBodyBytes = 4 << 20 // 4 MiB
 
 // DefaultBackendTimeout bounds how long Proxy waits for a single
 // backend's response before treating it as unreachable and trying the
@@ -91,6 +94,10 @@ type Proxy struct {
 	backends []string // e.g. "http://forgedb-1:8080", in configured order
 	client   *http.Client
 
+	// maxBodyBytes bounds a buffered request body (see ServeHTTP).
+	// Defaults to DefaultMaxBodyBytes; override with WithMaxBodyBytes.
+	maxBodyBytes int64
+
 	// guess is this Proxy's best current guess at the leader's base
 	// URL, used only to pick which backend to try *first* for the next
 	// request -- it is never trusted on its own. Every response is
@@ -102,6 +109,21 @@ type Proxy struct {
 	guess atomic.Value // string
 }
 
+// ProxyOption configures optional Proxy behavior. See WithMaxBodyBytes.
+type ProxyOption func(*Proxy)
+
+// WithMaxBodyBytes overrides the default buffered-request-body limit
+// (DefaultMaxBodyBytes). n must be positive -- a value <= 0 is ignored
+// and the default is kept, since this is a safety bound that must
+// never silently become "unlimited."
+func WithMaxBodyBytes(n int64) ProxyOption {
+	return func(p *Proxy) {
+		if n > 0 {
+			p.maxBodyBytes = n
+		}
+	}
+}
+
 // NewProxy returns a Proxy that forwards requests to one of backends,
 // following each node's own not-leader hint (see the package doc
 // comment) until one accepts the request or every candidate has been
@@ -109,12 +131,13 @@ type Proxy struct {
 // itself; see config.LoadGateway, which fails fast on an empty list
 // before a Proxy is ever constructed. timeout bounds each individual
 // backend attempt; a value <= 0 uses DefaultBackendTimeout.
-func NewProxy(backends []string, timeout time.Duration) *Proxy {
+func NewProxy(backends []string, timeout time.Duration, opts ...ProxyOption) *Proxy {
 	if timeout <= 0 {
 		timeout = DefaultBackendTimeout
 	}
 	p := &Proxy{
-		backends: append([]string(nil), backends...),
+		backends:     append([]string(nil), backends...),
+		maxBodyBytes: DefaultMaxBodyBytes,
 		client: &http.Client{
 			Timeout: timeout,
 			// Proxy decides for itself, from each response's own status
@@ -125,7 +148,25 @@ func NewProxy(backends []string, timeout time.Duration) *Proxy {
 		},
 	}
 	p.guess.Store("")
+	for _, opt := range opts {
+		opt(p)
+	}
 	return p
+}
+
+// isTrustedBackend reports whether addr is exactly one of this Proxy's
+// statically configured backends (see the Proxy.backends doc comment
+// -- ultimately config.LoadGateway's PEERS-derived list). Used by
+// ServeHTTP to validate a 421 response's leader_http hint before ever
+// forwarding a request to it: see that call site's comment for why a
+// hint must never be trusted on its own.
+func (p *Proxy) isTrustedBackend(addr string) bool {
+	for _, b := range p.backends {
+		if b == addr {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeHTTP implements http.Handler. It buffers the incoming request
@@ -141,7 +182,7 @@ func NewProxy(backends []string, timeout time.Duration) *Proxy {
 // never a response that merely happens to come from an arbitrary node
 // (see the package doc comment's "never decides leadership itself").
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, err := readLimited(r.Body, maxBodyBytes)
+	body, err := readLimited(r.Body, p.maxBodyBytes)
 	if err != nil {
 		writeGatewayError(w, http.StatusRequestEntityTooLarge, "request_too_large", err.Error())
 		return
@@ -168,14 +209,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if status == http.StatusMisdirectedRequest {
 			sawNotLeader = true
-			if hint := parseLeaderHint(respBody); hint != "" && !tried[hint] {
+			// A hint is only ever followed when it names one of this
+			// Proxy's own statically configured backends (see
+			// isTrustedBackend). A backend's 421 body is attacker-
+			// influenced input the moment anything between here and
+			// that backend can be tampered with (the Docker-internal
+			// gRPC/HTTP path is plaintext -- see
+			// docs/deployment/phase13-hardening.md's limitations); an
+			// unvalidated hint would let a compromised or spoofed node
+			// redirect this Proxy to an arbitrary upstream URL of its
+			// choosing. Rejecting an untrusted hint falls back to
+			// exactly the "no usable hint" path below -- it costs at
+			// most one more candidate, never a wrong result.
+			if hint := parseLeaderHint(respBody); hint != "" && !tried[hint] && p.isTrustedBackend(hint) {
 				p.guess.Store(hint)
 				order = append([]string{hint}, order...)
 			}
-			// No usable hint (e.g. mid-election, or the hint pointed at
-			// a candidate already tried): keep going with whatever
-			// candidates remain. This single 421 is not yet a final
-			// answer for the client.
+			// No usable hint (e.g. mid-election, the hint pointed at a
+			// candidate already tried, or the hint named an untrusted
+			// address): keep going with whatever candidates remain.
+			// This single 421 is not yet a final answer for the client.
 			continue
 		}
 

@@ -36,11 +36,14 @@ import (
 // re-encoded.
 
 const (
-	// maxValueBytes bounds a PUT request body, matching
+	// DefaultMaxValueBytes bounds a PUT request body when Server is not
+	// given an explicit WithMaxValueBytes option, matching
 	// statemachine.Command's own value-size bound so an oversized body is
 	// rejected here, with a clear 413, instead of failing later inside
-	// Command.Encode.
-	maxValueBytes = 1 << 20 // 1 MiB, matches statemachine.maxValueLen
+	// Command.Encode. Phase 13 makes this configurable (see
+	// config.Config.MaxValueBytes / WithMaxValueBytes) without changing
+	// this default.
+	DefaultMaxValueBytes = 1 << 20 // 1 MiB, matches statemachine.maxValueLen
 
 	// defaultWriteTimeout and defaultReadTimeout bound how long a /kv
 	// request waits for its write to be applied (PUT/DELETE) or for a
@@ -143,7 +146,7 @@ func (s *Server) handleKV(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKVPut(w http.ResponseWriter, r *http.Request, key string) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxValueBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxValueBytes)
 	value, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)

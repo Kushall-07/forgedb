@@ -30,22 +30,66 @@ x-peers: &peers
 x-api-token: &api_token
   FORGEDB_API_TOKEN: ${FORGEDB_API_TOKEN:?FORGEDB_API_TOKEN must be set -- see .env.example}
 
+# FORGEDB_CORS_ORIGINS is optional (see internal/api/cors.go /
+# internal/config's FORGEDB_CORS_ORIGINS doc comment): a comma-separated
+# list of exact browser Origins allowed to read a cross-origin response
+# from a node's HTTP API -- e.g. a dashboard deployed on its own domain.
+# Unlike FORGEDB_API_TOKEN, this has a safe empty default (no origin
+# allowed, i.e. CORS disabled) rather than failing the build/start, since
+# an operator who never sets it keeps this package's pre-Phase-13
+# behavior exactly. Do NOT put a real deployment's actual domain
+# (including the temporary *.trycloudflare.com Cloudflare Quick Tunnel
+# hostname) in this tracked file -- set it in your local, untracked
+# .env instead (see .env.example).
+x-cors: &cors
+  FORGEDB_CORS_ORIGINS: ${FORGEDB_CORS_ORIGINS:-}
+
+# Baseline container hardening applied to every service below: drop
+# every Linux capability the process does not need (none of ForgeDB's
+# binaries bind a privileged port or need any capability at all) and
+# refuse to gain new privileges via setuid/setgid binaries. This is
+# independent of -- and in addition to -- the Dockerfile's own non-root
+# USER; it does not affect persistent storage, networking, healthchecks,
+# or graceful shutdown. A read-only root filesystem is deliberately NOT
+# applied here: the KV WAL and Raft log/snapshot under /data are already
+# isolated to named volumes, but the Go runtime and various libraries
+# can still need to write small scratch/temp files outside it, and this
+# phase's priority is "do not break runtime operation" over additional
+# filesystem hardening -- see docs/deployment/phase13-hardening.md's
+# FUTURE HARDENING section.
+x-hardening: &hardening
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
 services:
   forgedb-1:
+    <<: *hardening
     build: .
     image: forgedb:latest
     container_name: forgedb-1
     hostname: forgedb-1
     environment:
-      <<: [*peers, *api_token]
+      <<: [*peers, *api_token, *cors]
       NODE_ID: node-1
       HTTP_ADDR: 0.0.0.0:8080
       GRPC_ADDR: 0.0.0.0:9090
       DATA_DIR: /data
       LOG_LEVEL: info
+    # Bound to 127.0.0.1 (loopback), not 0.0.0.0: these node ports are
+    # operator conveniences on the Docker host itself (curl
+    # localhost:808N/..., deploy/scripts/) and are never meant to be the
+    # public entrypoint -- see docs/deployment/phase13-hardening.md's
+    # "Docker ports" section. The intended public path is Internet ->
+    # Caddy -> forge-gateway -> whichever node is leader; this binding
+    # keeps Docker itself from exposing a node directly, as defense in
+    # depth independent of the Azure NSG. Container-to-container traffic
+    # on forgedb-net is entirely unaffected -- this only changes what the
+    # Docker host's own network interfaces forward from the outside.
     ports:
-      - "8081:8080"
-      - "9091:9090"
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:9091:9090"
     volumes:
       - forgedb-node1-data:/data
     networks:
@@ -53,20 +97,22 @@ services:
     restart: unless-stopped
 
   forgedb-2:
+    <<: *hardening
     build: .
     image: forgedb:latest
     container_name: forgedb-2
     hostname: forgedb-2
     environment:
-      <<: [*peers, *api_token]
+      <<: [*peers, *api_token, *cors]
       NODE_ID: node-2
       HTTP_ADDR: 0.0.0.0:8080
       GRPC_ADDR: 0.0.0.0:9090
       DATA_DIR: /data
       LOG_LEVEL: info
+    # See forgedb-1's ports comment: loopback-only, defense in depth.
     ports:
-      - "8082:8080"
-      - "9092:9090"
+      - "127.0.0.1:8082:8080"
+      - "127.0.0.1:9092:9090"
     volumes:
       - forgedb-node2-data:/data
     networks:
@@ -74,20 +120,22 @@ services:
     restart: unless-stopped
 
   forgedb-3:
+    <<: *hardening
     build: .
     image: forgedb:latest
     container_name: forgedb-3
     hostname: forgedb-3
     environment:
-      <<: [*peers, *api_token]
+      <<: [*peers, *api_token, *cors]
       NODE_ID: node-3
       HTTP_ADDR: 0.0.0.0:8080
       GRPC_ADDR: 0.0.0.0:9090
       DATA_DIR: /data
       LOG_LEVEL: info
+    # See forgedb-1's ports comment: loopback-only, defense in depth.
     ports:
-      - "8083:8080"
-      - "9093:9090"
+      - "127.0.0.1:8083:8080"
+      - "127.0.0.1:9093:9090"
     volumes:
       - forgedb-node3-data:/data
     networks:
@@ -109,6 +157,7 @@ services:
   # own authMiddleware (internal/api/auth.go) is still the only thing
   # that ever validates it.
   forge-gateway:
+    <<: *hardening
     build: .
     image: forgedb:latest
     container_name: forge-gateway
@@ -117,8 +166,15 @@ services:
     environment:
       <<: [*peers]
       GATEWAY_ADDR: 0.0.0.0:8090
+    # Loopback-only, like every other published port in this file (see
+    # forgedb-1's ports comment) -- Caddy runs natively on this same
+    # Docker host (not in Compose; see deploy/Caddyfile.example) and
+    # reaches forge-gateway at 127.0.0.1:8090, exactly as before. Only
+    # Caddy's own public listener (fronted by the Cloudflare Tunnel) is
+    # meant to be Internet-reachable; this binding makes that true at
+    # the Docker level too, not only via the Azure NSG.
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     networks:
       - forgedb-net
     depends_on:

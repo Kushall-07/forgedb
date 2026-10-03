@@ -44,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxy := gateway.NewProxy(cfg.Backends, gateway.DefaultBackendTimeout)
+	proxy := gateway.NewProxy(cfg.Backends, gateway.DefaultBackendTimeout, gateway.WithMaxBodyBytes(cfg.MaxBodyBytes))
 	srv := &http.Server{Addr: cfg.Addr, Handler: proxy}
 
 	errCh := make(chan error, 1)

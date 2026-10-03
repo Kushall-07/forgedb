@@ -57,11 +57,12 @@ func TestParsePeers_InvalidEntry(t *testing.T) {
 
 func validConfig() Config {
 	return Config{
-		NodeID:   "node-1",
-		HTTP:     ":8081",
-		GRPC:     ":9091",
-		DataDir:  "data",
-		APIToken: "test-token",
+		NodeID:        "node-1",
+		HTTP:          ":8081",
+		GRPC:          ":9091",
+		DataDir:       "data",
+		APIToken:      "test-token",
+		MaxValueBytes: DefaultMaxValueBytes,
 		Peers: []Node{
 			{ID: "node-1", GRPC: ":9091", HTTP: ":8081"},
 			{ID: "node-2", GRPC: "forgedb-2:9092", HTTP: "forgedb-2:8082"},
@@ -163,11 +164,12 @@ func TestConfig_Validate_SelfAddressMismatch(t *testing.T) {
 // check before the fix.
 func TestConfig_Validate_WildcardBindWithHostnameAdvertise(t *testing.T) {
 	cfg := Config{
-		NodeID:   "node-1",
-		HTTP:     "0.0.0.0:8080",
-		GRPC:     "0.0.0.0:9090",
-		DataDir:  "/data",
-		APIToken: "test-token",
+		NodeID:        "node-1",
+		HTTP:          "0.0.0.0:8080",
+		GRPC:          "0.0.0.0:9090",
+		DataDir:       "/data",
+		APIToken:      "test-token",
+		MaxValueBytes: DefaultMaxValueBytes,
 		Peers: []Node{
 			{ID: "node-1", GRPC: "forgedb-1:9090", HTTP: "forgedb-1:8080"},
 			{ID: "node-2", GRPC: "forgedb-2:9090", HTTP: "forgedb-2:8080"},
@@ -180,11 +182,12 @@ func TestConfig_Validate_WildcardBindWithHostnameAdvertise(t *testing.T) {
 
 func TestConfig_Validate_WildcardBindWrongAdvertisedPort(t *testing.T) {
 	cfg := Config{
-		NodeID:   "node-1",
-		HTTP:     "0.0.0.0:8080",
-		GRPC:     "0.0.0.0:9090",
-		DataDir:  "/data",
-		APIToken: "test-token",
+		NodeID:        "node-1",
+		HTTP:          "0.0.0.0:8080",
+		GRPC:          "0.0.0.0:9090",
+		DataDir:       "/data",
+		APIToken:      "test-token",
+		MaxValueBytes: DefaultMaxValueBytes,
 		Peers: []Node{
 			{ID: "node-1", GRPC: "forgedb-1:9999", HTTP: "forgedb-1:8080"}, // wrong port
 		},
@@ -311,5 +314,90 @@ func TestLoad_InvalidMetricsEnabledFailsFast(t *testing.T) {
 	t.Setenv(EnvMetricsEnabled, "not-a-bool")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want error for invalid METRICS_ENABLED")
+	}
+}
+
+func TestLoad_MaxValueBytes_DefaultsWhenUnset(t *testing.T) {
+	t.Setenv(EnvNodeID, "node-1")
+	t.Setenv(EnvPeers, "")
+	t.Setenv(EnvAPIToken, "test-token")
+	t.Setenv(EnvMaxValueBytes, "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxValueBytes != DefaultMaxValueBytes {
+		t.Fatalf("MaxValueBytes = %d, want default %d", cfg.MaxValueBytes, DefaultMaxValueBytes)
+	}
+}
+
+func TestLoad_MaxValueBytes_CustomValue(t *testing.T) {
+	t.Setenv(EnvNodeID, "node-1")
+	t.Setenv(EnvPeers, "")
+	t.Setenv(EnvAPIToken, "test-token")
+	t.Setenv(EnvMaxValueBytes, "2097152") // 2 MiB
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxValueBytes != 2097152 {
+		t.Fatalf("MaxValueBytes = %d, want 2097152", cfg.MaxValueBytes)
+	}
+}
+
+func TestLoad_MaxValueBytes_NonNumericFailsFast(t *testing.T) {
+	t.Setenv(EnvNodeID, "node-1")
+	t.Setenv(EnvPeers, "")
+	t.Setenv(EnvAPIToken, "test-token")
+	t.Setenv(EnvMaxValueBytes, "not-a-number")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want error for non-numeric MAX_VALUE_BYTES")
+	}
+}
+
+func TestLoad_MaxValueBytes_NonPositiveFailsFast(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv(EnvNodeID, "node-1")
+			t.Setenv(EnvPeers, "")
+			t.Setenv(EnvAPIToken, "test-token")
+			t.Setenv(EnvMaxValueBytes, v)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() error = nil, want error for MAX_VALUE_BYTES=%s (must never silently reduce to a non-positive limit)", v)
+			}
+		})
+	}
+}
+
+func TestLoad_CORSOrigins_DefaultsToNil(t *testing.T) {
+	t.Setenv(EnvNodeID, "node-1")
+	t.Setenv(EnvPeers, "")
+	t.Setenv(EnvAPIToken, "test-token")
+	t.Setenv(EnvCORSOrigins, "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CORSOrigins != nil {
+		t.Fatalf("CORSOrigins = %v, want nil (CORS disabled) when FORGEDB_CORS_ORIGINS is unset", cfg.CORSOrigins)
+	}
+}
+
+func TestLoad_CORSOrigins_ParsesCommaSeparatedList(t *testing.T) {
+	t.Setenv(EnvNodeID, "node-1")
+	t.Setenv(EnvPeers, "")
+	t.Setenv(EnvAPIToken, "test-token")
+	t.Setenv(EnvCORSOrigins, "https://dashboard.example.vercel.app, http://localhost:5173 ,")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"https://dashboard.example.vercel.app", "http://localhost:5173"}
+	if !reflect.DeepEqual(cfg.CORSOrigins, want) {
+		t.Fatalf("CORSOrigins = %v, want %v", cfg.CORSOrigins, want)
 	}
 }

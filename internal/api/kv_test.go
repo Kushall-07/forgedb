@@ -190,7 +190,7 @@ func TestHandleKV_Put_RejectsOversizedBody(t *testing.T) {
 	leader, _ := newRunningCluster(t)
 	srv := NewServer(leader, metrics.NewRegistry(), testAPIToken)
 
-	oversized := bytes.Repeat([]byte("x"), maxValueBytes+1)
+	oversized := bytes.Repeat([]byte("x"), DefaultMaxValueBytes+1)
 	rr := doKV(srv, http.MethodPut, "/kv/big", oversized)
 	if rr.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", rr.Code)

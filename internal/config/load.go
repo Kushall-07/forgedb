@@ -29,6 +29,18 @@ const (
 	// EnvAPIToken names the environment variable Load reads
 	// Config.APIToken from. It has no default -- see Validate.
 	EnvAPIToken = "FORGEDB_API_TOKEN"
+
+	// EnvMaxValueBytes names the environment variable Load reads
+	// Config.MaxValueBytes from. Empty/unset defaults to
+	// DefaultMaxValueBytes; see Validate for why an explicitly set,
+	// non-positive value is rejected rather than silently defaulted.
+	EnvMaxValueBytes = "MAX_VALUE_BYTES"
+
+	// EnvCORSOrigins names the environment variable Load reads
+	// Config.CORSOrigins from: zero or more comma-separated exact
+	// Origins (e.g. "https://dashboard.example.vercel.app,http://localhost:5173").
+	// Empty/unset means no origin is allowed -- see Config.CORSOrigins.
+	EnvCORSOrigins = "FORGEDB_CORS_ORIGINS"
 )
 
 // Load builds a Config from environment variables and validates it (see
@@ -55,6 +67,10 @@ const (
 //	                fails fast when this is unset or empty, rather than
 //	                starting a client-facing HTTP API with no
 //	                authentication.
+//	MAX_VALUE_BYTES default DefaultMaxValueBytes (1 MiB) -- see
+//	                Config.MaxValueBytes.
+//	FORGEDB_CORS_ORIGINS default "" (no origin allowed -- CORS
+//	                disabled) -- see Config.CORSOrigins.
 //
 // PEERS lists the cluster's full static roster (every node, including
 // this one -- see Validate) as comma-separated "id=grpcAddr" or
@@ -107,6 +123,17 @@ func Load() (Config, error) {
 		cfg.TickInterval = d
 	}
 
+	cfg.MaxValueBytes = DefaultMaxValueBytes
+	if v := os.Getenv(EnvMaxValueBytes); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: invalid %s %q: %w", EnvMaxValueBytes, v, err)
+		}
+		cfg.MaxValueBytes = n
+	}
+
+	cfg.CORSOrigins = parseCORSOrigins(os.Getenv(EnvCORSOrigins))
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -118,6 +145,31 @@ func getenvDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseCORSOrigins parses the FORGEDB_CORS_ORIGINS environment
+// variable's format: zero or more comma-separated exact Origins, each
+// trimmed of surrounding whitespace; empty entries (e.g. a trailing
+// comma) are dropped. An empty/unset raw string returns nil -- no
+// origin allowed, matching internal/api's pre-Phase-13 default. Unlike
+// ParsePeers, there is no further structural validation here: an
+// Origin is compared only by exact string equality (see
+// internal/api/cors.go's isAllowedOrigin), so a malformed entry simply
+// never matches any real browser Origin rather than needing to be
+// rejected at load time.
+func parseCORSOrigins(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var origins []string
+	for _, o := range strings.Split(raw, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			origins = append(origins, o)
+		}
+	}
+	return origins
 }
 
 // ParsePeers parses the PEERS environment variable's format: zero or
@@ -191,6 +243,9 @@ func (c Config) Validate() error {
 	}
 	if c.APIToken == "" {
 		return fmt.Errorf("config: %s must be set -- refusing to start the HTTP API without authentication configured", EnvAPIToken)
+	}
+	if c.MaxValueBytes <= 0 {
+		return fmt.Errorf("config: %s must be a positive number of bytes, got %d", EnvMaxValueBytes, c.MaxValueBytes)
 	}
 	if err := validateAddr("HTTP", c.HTTP); err != nil {
 		return err

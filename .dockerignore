@@ -21,3 +21,11 @@ tmp/
 # Local Docker artifacts never need to be in their own build context.
 docker-compose.yml
 deploy/scripts/
+
+# Secrets: a local .env (see .gitignore) must never enter the build
+# context -- Dockerfile's builder stage does `COPY . .`, so without this
+# exclusion a real FORGEDB_API_TOKEN would land inside the builder
+# image's own layer even though the final runtime stage never COPYs it
+# from there. .env.example is a placeholder, not a secret, and is
+# deliberately not excluded here.
+.env

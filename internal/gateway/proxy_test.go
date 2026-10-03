@@ -92,6 +92,53 @@ func TestProxy_FollowsLeaderHintOnFollower421(t *testing.T) {
 	}
 }
 
+// TestProxy_RejectsUntrustedLeaderHint proves a 421 response's
+// leader_http hint is never followed unless it names one of this
+// Proxy's own statically configured backends. follower here points the
+// hint at untrusted (an httptest server that is NOT in the configured
+// backend list -- standing in for a compromised or spoofed node on the
+// plaintext internal network). If the hint were followed, Proxy would
+// relay untrusted's distinctive "UNTRUSTED" response as the final
+// answer; instead it must reject the hint, keep going, and reach the
+// real (configured) leader next.
+func TestProxy_RejectsUntrustedLeaderHint(t *testing.T) {
+	var untrustedHits int32
+	untrusted := fakeNode(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&untrustedHits, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("UNTRUSTED"))
+	})
+
+	var leaderHits int32
+	leader := fakeNode(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&leaderHits, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("applied"))
+	})
+
+	// follower's hint points at untrusted.URL, which is deliberately
+	// absent from the backends list passed to NewProxy below.
+	follower := fakeNode(t, notLeaderHandler("node-untrusted", untrusted.URL))
+
+	p := NewProxy([]string{follower.URL, leader.URL}, time.Second)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/kv/greeting", nil)
+	p.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Body.String() != "applied" {
+		t.Fatalf("body = %q, want %q (the untrusted hint must never be followed)", rr.Body.String(), "applied")
+	}
+	if atomic.LoadInt32(&untrustedHits) != 0 {
+		t.Fatalf("untrusted backend was hit %d times, want 0 -- an unconfigured leader_http hint must never become an upstream target", untrustedHits)
+	}
+	if atomic.LoadInt32(&leaderHits) != 1 {
+		t.Fatalf("leader hit %d times, want exactly 1", leaderHits)
+	}
+}
+
 // TestProxy_LeaderChange_CachedGuessFollowsNewLeader simulates a
 // failover: the first request establishes node A as the cached leader
 // guess; node A then starts answering 421 (it lost leadership) and

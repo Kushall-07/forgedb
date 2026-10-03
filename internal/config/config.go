@@ -66,7 +66,36 @@ type Config struct {
 	// tick actually happens in real time. Zero means
 	// DefaultTickInterval.
 	TickInterval time.Duration
+
+	// MaxValueBytes bounds a /kv PUT request body (see
+	// internal/api.Server's own DefaultMaxValueBytes, which this
+	// overrides via api.WithMaxValueBytes). Load reads it from the
+	// MAX_VALUE_BYTES environment variable and defaults it to
+	// DefaultMaxValueBytes when unset -- Phase 13 makes the existing
+	// limit configurable without silently lowering it: Validate rejects
+	// an explicitly configured value <= 0 rather than treating it as
+	// "unlimited" or falling back to the default.
+	MaxValueBytes int64
+
+	// CORSOrigins is the exact set of browser Origins internal/api's
+	// CORS layer (see internal/api/cors.go) is allowed to reflect into
+	// Access-Control-Allow-Origin -- e.g. the dashboard's deployed
+	// domain. Load reads it from the comma-separated
+	// FORGEDB_CORS_ORIGINS environment variable; a nil/empty value (the
+	// default) disables CORS entirely, exactly as internal/api behaved
+	// before Phase 13. There is deliberately no wildcard support -- see
+	// that package's doc comment for why an explicit allow-list, never
+	// "*", is required for an authenticated API.
+	CORSOrigins []string
 }
 
 // DefaultTickInterval is used when Config.TickInterval is left zero.
 const DefaultTickInterval = 100 * time.Millisecond
+
+// DefaultMaxValueBytes is used when Config.MaxValueBytes is left zero
+// (i.e. MAX_VALUE_BYTES is unset). It matches
+// internal/api.DefaultMaxValueBytes -- the two packages do not import
+// one another (config must not depend on api), so this value is kept
+// in sync by convention; internal/config/load_test.go and
+// internal/api/kv_test.go each pin their own package's constant.
+const DefaultMaxValueBytes = 1 << 20 // 1 MiB

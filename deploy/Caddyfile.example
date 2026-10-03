@@ -38,6 +38,32 @@
 # production address in a tracked file (see .env.example's own note on
 # secrets -- the same principle applies to deployment-specific hostnames).
 example.com {
+	# Baseline security headers (Phase 13 --
+	# docs/deployment/phase13-hardening.md). These are static response
+	# headers Caddy adds to every response regardless of upstream status,
+	# and are additive to whatever forge-gateway/a ForgeDB node already
+	# set (including CORS's Access-Control-* headers and /kv's
+	# application/octet-stream bodies -- see internal/api/cors.go and
+	# internal/api/kv.go) -- Caddy's `header` directive sets/adds named
+	# headers, it does not replace or strip any others:
+	#   - X-Content-Type-Options: stops a browser from "sniffing" a
+	#     response's declared Content-Type into something else, which
+	#     matters here because /kv GET responses are
+	#     application/octet-stream and /metrics is a bare text format.
+	#   - X-Frame-Options: refuses to let this site be framed by another
+	#     origin (clickjacking defense); the API/dashboard have no
+	#     legitimate reason to be embedded in a frame.
+	#   - Referrer-Policy: never sends this site's full URL (which could
+	#     include a /kv/{key} path) as a Referer header to a different
+	#     origin.
+	# None of these affect request routing, the streaming/binary /kv
+	# response bodies, or /health -- they are response headers only.
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
 	reverse_proxy forge-gateway:8090
 }
 
@@ -49,3 +75,12 @@ example.com {
 # termination (or a Cloudflare Tunnel in front of it) is unaffected by
 # this change: only the reverse_proxy upstream target changed, from a
 # specific node to the stable gateway address.
+#
+# CORS is NOT handled here. The dashboard's cross-origin access (see
+# docs/deployment/phase13-hardening.md) is handled end to end by
+# internal/api/cors.go, configured via FORGEDB_CORS_ORIGINS on each
+# ForgeDB node -- forge-gateway transparently relays whatever
+# Access-Control-* headers that node's response already carries (see
+# internal/gateway/proxy.go's writeResponse), and this Caddyfile adds
+# none of its own, so there is exactly one place CORS policy is ever
+# decided.

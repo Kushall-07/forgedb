@@ -98,6 +98,53 @@ func TestLoadGateway_InvalidPeersFails(t *testing.T) {
 	}
 }
 
+func TestLoadGateway_MaxBodyBytes_DefaultsWhenUnset(t *testing.T) {
+	withEnv(t, map[string]string{
+		EnvGatewayAddr:         "",
+		EnvPeers:               "node-1=forgedb-1:9090|forgedb-1:8080",
+		EnvGatewayMaxBodyBytes: "",
+	})
+
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway() error = %v", err)
+	}
+	if cfg.MaxBodyBytes != DefaultGatewayMaxBodyBytes {
+		t.Errorf("MaxBodyBytes = %d, want default %d", cfg.MaxBodyBytes, DefaultGatewayMaxBodyBytes)
+	}
+}
+
+func TestLoadGateway_MaxBodyBytes_CustomValue(t *testing.T) {
+	withEnv(t, map[string]string{
+		EnvGatewayAddr:         "",
+		EnvPeers:               "node-1=forgedb-1:9090|forgedb-1:8080",
+		EnvGatewayMaxBodyBytes: "8388608", // 8 MiB
+	})
+
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway() error = %v", err)
+	}
+	if cfg.MaxBodyBytes != 8388608 {
+		t.Errorf("MaxBodyBytes = %d, want 8388608", cfg.MaxBodyBytes)
+	}
+}
+
+func TestLoadGateway_MaxBodyBytes_NonPositiveFailsFast(t *testing.T) {
+	for _, v := range []string{"0", "-1", "not-a-number"} {
+		t.Run(v, func(t *testing.T) {
+			withEnv(t, map[string]string{
+				EnvGatewayAddr:         "",
+				EnvPeers:               "node-1=forgedb-1:9090|forgedb-1:8080",
+				EnvGatewayMaxBodyBytes: v,
+			})
+			if _, err := LoadGateway(); err == nil {
+				t.Fatalf("LoadGateway() error = nil, want error for GATEWAY_MAX_BODY_BYTES=%s", v)
+			}
+		})
+	}
+}
+
 func TestLoadGateway_SchemeAlreadyPresentIsKept(t *testing.T) {
 	withEnv(t, map[string]string{
 		EnvGatewayAddr: "",
