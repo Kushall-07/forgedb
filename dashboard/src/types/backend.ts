@@ -83,3 +83,32 @@ export interface LiveNodeSnapshot {
   memtableBytes: number;
   processUptimeSeconds: number;
 }
+
+/**
+ * Phase 14's /kv/{key} wire shapes (see internal/api/kv.go), verified
+ * against the running handler rather than guessed:
+ *
+ *   PUT    /kv/{key}  body=raw bytes -> 200 {"status":"ok"}
+ *   DELETE /kv/{key}                 -> 200 {"status":"deleted"}
+ *   GET    /kv/{key}                 -> 200 application/octet-stream (raw bytes)
+ *
+ * PUT and DELETE share the same success envelope; GET's success case is
+ * not JSON at all, so it has no corresponding wire type here -- its raw
+ * body is read and decoded directly in services/forgedbApi.ts.
+ */
+export interface BackendKvWriteResponse {
+  status: string;
+}
+
+/** 421 Misdirected Request body for any /kv write or read attempted against a non-leader node. */
+export interface BackendNotLeaderResponse {
+  error: string;
+  leader_id?: string;
+  leader_http?: string;
+}
+
+/** 503 body for GET /kv/{key} when dbnode.ErrReadUnavailable is returned (leader cannot currently confirm a read barrier). */
+export interface BackendReadUnavailableResponse {
+  error: string;
+  reason: string;
+}

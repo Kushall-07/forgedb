@@ -63,14 +63,14 @@ const seedEntries: Record<string, KVEntry> = {
 };
 
 const seedOperations: KVOperation[] = [
-  { id: 'req-0001', timestamp: '09:10:04', operation: 'PUT', key: 'config:theme', target: 'NODE-2', status: 200, latencyMs: 6.1, consistency: 'LINEARIZABLE' },
-  { id: 'req-0002', timestamp: '09:12:41', operation: 'PUT', key: 'session:abc123', target: 'NODE-2', status: 200, latencyMs: 7.2, consistency: 'LINEARIZABLE' },
-  { id: 'req-0003', timestamp: '09:13:05', operation: 'GET', key: 'session:abc123', target: 'NODE-2', status: 200, latencyMs: 3.4, consistency: 'LOCAL' },
-  { id: 'req-0004', timestamp: '09:14:02', operation: 'PUT', key: 'user:10042', target: 'NODE-2', status: 200, latencyMs: 6.9, consistency: 'LINEARIZABLE' },
-  { id: 'req-0005', timestamp: '09:14:30', operation: 'GET', key: 'user:10042', target: 'NODE-2', status: 200, latencyMs: 4.8, consistency: 'LINEARIZABLE' },
-  { id: 'req-0006', timestamp: '09:15:12', operation: 'GET', key: 'config:theme', target: 'NODE-2', status: 200, latencyMs: 3.9, consistency: 'LOCAL' },
-  { id: 'req-0007', timestamp: '09:16:09', operation: 'DELETE', key: 'cache:item:77', target: 'NODE-2', status: 200, latencyMs: 6.4, consistency: 'LINEARIZABLE' },
-  { id: 'req-0008', timestamp: '09:17:51', operation: 'GET', key: 'cache:item:99', target: 'NODE-2', status: 404, latencyMs: 2.7, consistency: 'LINEARIZABLE' },
+  { id: 'req-0001', timestamp: '09:10:04', operation: 'PUT', key: 'config:theme', target: 'NODE-2', status: 200, latencyMs: 6.1, consistency: 'LINEARIZABLE', source: 'mock' },
+  { id: 'req-0002', timestamp: '09:12:41', operation: 'PUT', key: 'session:abc123', target: 'NODE-2', status: 200, latencyMs: 7.2, consistency: 'LINEARIZABLE', source: 'mock' },
+  { id: 'req-0003', timestamp: '09:13:05', operation: 'GET', key: 'session:abc123', target: 'NODE-2', status: 200, latencyMs: 3.4, consistency: 'LOCAL', source: 'mock' },
+  { id: 'req-0004', timestamp: '09:14:02', operation: 'PUT', key: 'user:10042', target: 'NODE-2', status: 200, latencyMs: 6.9, consistency: 'LINEARIZABLE', source: 'mock' },
+  { id: 'req-0005', timestamp: '09:14:30', operation: 'GET', key: 'user:10042', target: 'NODE-2', status: 200, latencyMs: 4.8, consistency: 'LINEARIZABLE', source: 'mock' },
+  { id: 'req-0006', timestamp: '09:15:12', operation: 'GET', key: 'config:theme', target: 'NODE-2', status: 200, latencyMs: 3.9, consistency: 'LOCAL', source: 'mock' },
+  { id: 'req-0007', timestamp: '09:16:09', operation: 'DELETE', key: 'cache:item:77', target: 'NODE-2', status: 200, latencyMs: 6.4, consistency: 'LINEARIZABLE', source: 'mock' },
+  { id: 'req-0008', timestamp: '09:17:51', operation: 'GET', key: 'cache:item:99', target: 'NODE-2', status: 404, latencyMs: 2.7, consistency: 'LINEARIZABLE', source: 'mock' },
 ];
 
 /** A few real keys to surface as one-click examples, not a full key browser. */
@@ -81,7 +81,8 @@ let operationLog: KVOperation[] = [...seedOperations];
 let requestCounter = seedOperations.length;
 let logIndex = cluster.commitIndex;
 
-function nextRequestId(): string {
+/** Shared across live and mock requests so the operation table's request IDs stay in one sequence regardless of source -- see hooks/useKvConsole.ts. */
+export function nextRequestId(): string {
   requestCounter += 1;
   return `req-${String(requestCounter).padStart(4, '0')}`;
 }
@@ -161,6 +162,7 @@ export function executeKvRequest(input: KVRequestInput): KVExecutionResult {
       leader: cluster.leader,
       body: null,
       errorMessage: `${node} is not the leader. Writes must go through ${cluster.leader}.`,
+      source: 'mock' as const,
     };
     const operation: KVOperation = {
       id: requestId,
@@ -171,6 +173,7 @@ export function executeKvRequest(input: KVRequestInput): KVExecutionResult {
       status: 307,
       latencyMs,
       consistency: input.consistency,
+      source: 'mock',
     };
     operationLog = [operation, ...operationLog];
     return { response, operation, entry: getEntry(input.key) };
@@ -183,6 +186,7 @@ export function executeKvRequest(input: KVRequestInput): KVExecutionResult {
     node,
     term: cluster.term,
     consistency: input.consistency,
+    source: 'mock' as const,
   };
 
   if (input.operation === 'GET') {
@@ -208,6 +212,7 @@ export function executeKvRequest(input: KVRequestInput): KVExecutionResult {
       status: response.status,
       latencyMs,
       consistency: input.consistency,
+      source: 'mock',
     };
     operationLog = [operation, ...operationLog];
     return { response, operation, entry: getEntry(input.key) };
@@ -251,6 +256,7 @@ export function executeKvRequest(input: KVRequestInput): KVExecutionResult {
       status: 200,
       latencyMs,
       consistency: input.consistency,
+      source: 'mock',
     };
     operationLog = [operation, ...operationLog];
     return { response, operation, entry };
@@ -286,6 +292,7 @@ export function executeKvRequest(input: KVRequestInput): KVExecutionResult {
     status: 200,
     latencyMs,
     consistency: input.consistency,
+    source: 'mock',
   };
   operationLog = [operation, ...operationLog];
   return { response, operation, entry: tombstone };
@@ -313,4 +320,5 @@ export const initialResponse: KVExecutionResponse = {
   consistency: 'LINEARIZABLE',
   found: true,
   body: { key: 'user:10042', value: seedEntries['user:10042'].value },
+  source: 'mock',
 };

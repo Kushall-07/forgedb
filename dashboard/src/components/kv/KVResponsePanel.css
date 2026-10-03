@@ -64,6 +64,11 @@
   border: 1px solid var(--status-identity-border);
   background: var(--status-identity-soft);
 }
+
+.kv-response__note--warn {
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-soft);
+}
 .kv-response__note p {
   margin: 0;
   flex-basis: 100%;

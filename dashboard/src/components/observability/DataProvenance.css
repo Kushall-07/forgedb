@@ -14,8 +14,15 @@
 }
 
 .observability-provenance__text {
-  margin: var(--sc-1) 0 0;
-  max-width: 68ch;
+  margin: var(--sc-2) 0 0;
+  max-width: 72ch;
   color: var(--sc-ink-soft);
   font-size: var(--sc-t-sm);
+}
+
+.observability-provenance__tag {
+  font-family: var(--sc-font-mono);
+  font-size: var(--sc-t-xs);
+  letter-spacing: var(--sc-track-wide);
+  color: var(--sc-ink);
 }

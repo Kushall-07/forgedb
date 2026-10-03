@@ -1,6 +1,6 @@
 import { Menu, X } from 'lucide-react';
-import { cluster } from '../../data/mockCluster';
-import { StatusIndicator } from '../ui/StatusIndicator';
+import { useBackendCluster } from '../../hooks/useBackendCluster';
+import { DataSourceBadge } from '../ui/DataSourceBadge';
 import './TopBar.css';
 
 interface TopBarProps {
@@ -9,6 +9,8 @@ interface TopBarProps {
 }
 
 export function TopBar({ mobileOpen, onToggleMobile }: TopBarProps) {
+  const { status, cluster } = useBackendCluster();
+
   return (
     <header className="topbar">
       <div className="topbar__left">
@@ -25,7 +27,7 @@ export function TopBar({ mobileOpen, onToggleMobile }: TopBarProps) {
       </div>
 
       <div className="topbar__right">
-        <StatusIndicator tone="sync" label="Cluster Healthy" pulse size="sm" />
+        <DataSourceBadge status={status} />
         <span className="topbar__divider" aria-hidden="true" />
         <span className="topbar__field">
           <span className="topbar__field-label mono">Leader</span>

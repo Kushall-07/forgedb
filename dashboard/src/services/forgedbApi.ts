@@ -29,6 +29,9 @@ import type {
 import type {
   BackendClusterStatus,
   BackendHealthResponse,
+  BackendKvWriteResponse,
+  BackendNotLeaderResponse,
+  BackendReadUnavailableResponse,
   LiveNodeSnapshot,
 } from '../types/backend';
 
@@ -57,23 +60,29 @@ import type {
  *
  * No network calls are made for most of the methods below: swapping their
  * bodies for `fetch(...)` calls is the entire remaining migration, and no UI
- * component needs to change when that happens. The KV Console itself still
- * reads src/data/mockKV.ts directly, and the Raft page still reads
- * src/data/mockRaft.ts directly, the same way Cluster's topology/replication
- * views still read src/data/mockCluster.ts, so most of this interface
- * remains documentation of the target contract rather than code already on
- * the render path. The Observability page follows the same pattern, reading
- * src/data/mockObservability.ts directly rather than through this module.
+ * component needs to change when that happens. The Raft page still reads
+ * src/data/mockRaft.ts directly, the same way Cluster's mock topology/
+ * replication views still read src/data/mockCluster.ts, so most of this
+ * interface remains documentation of the target contract rather than code
+ * already on the render path. The Observability page follows the same
+ * pattern, reading src/data/mockObservability.ts directly rather than
+ * through this module (Phase D).
  *
- * getLiveHealth/getLiveCluster/getLiveSnapshot are the one piece of this
- * module that IS real: they call the actual ForgeDB /health and /cluster
- * endpoints (through Vite's dev proxy at /api/*, see vite.config.ts, since
- * the Go backend has no CORS middleware) and map the response into this
- * module's types. They never fall back to mock data themselves -- they
+ * getLiveHealth/getLiveCluster/getLiveSnapshot/getLiveKv/putLiveKv/
+ * deleteLiveKv are real (Phase B and Phase C respectively): they call the
+ * actual ForgeDB /health, /cluster, and /kv/{key} endpoints (through Vite's
+ * dev proxy at /api/*, see vite.config.ts, since the Go backend has no CORS
+ * middleware) and map the response into this module's types. The health/
+ * cluster methods never fall back to mock data themselves -- they
  * reject/resolve with an explicit 'unavailable' result on any failure, so a
  * caller (see src/hooks/useBackendCluster.ts) decides whether and how to
  * fall back, rather than this layer silently turning a failure into a
- * healthy-looking result.
+ * healthy-looking result. getLiveKv/putLiveKv/deleteLiveKv follow the same
+ * rule but go one step further: a 404/421/503/etc. is a legitimate backend
+ * answer, not a failure, so those resolve to a tagged result too, and only
+ * an actual network error throws BackendRequestError -- see
+ * src/hooks/useKvConsole.ts, which is the KV Console's equivalent of
+ * useBackendCluster.ts and decides live-vs-mock per request.
  */
 export interface ForgeDbApi {
   getCluster(): Promise<ClusterState>;
@@ -100,7 +109,41 @@ export interface ForgeDbApi {
   getLiveCluster(): Promise<{ cluster: ClusterState; node: LiveNodeSnapshot }>;
   /** Both of the above in parallel, collapsed into a tagged result instead of throwing -- the shape src/hooks/useBackendCluster.ts consumes directly. */
   getLiveSnapshot(): Promise<LiveSnapshot>;
+  /**
+   * Real GET /kv/{key}. Resolves to a tagged LiveKvGetResult for every
+   * outcome the backend itself can produce (found, not found, not leader,
+   * read unavailable, or another non-2xx) -- those are all legitimate
+   * protocol answers, not failures. Only throws BackendRequestError when
+   * the request never reached the backend at all (network error).
+   */
+  getLiveKv(key: string): Promise<LiveKvGetResult>;
+  /** Real PUT /kv/{key} with value sent verbatim as the request body. See getLiveKv for the success-vs-failure split. */
+  putLiveKv(key: string, value: string): Promise<LiveKvWriteResult>;
+  /** Real DELETE /kv/{key}. See getLiveKv for the success-vs-failure split. */
+  deleteLiveKv(key: string): Promise<LiveKvWriteResult>;
+  /** Real GET /metrics, returned as the raw Prometheus text exposition body (see internal/api/server.go's handleMetrics). Parsing it is lib/metrics/buildLiveMetricsSnapshot.ts's job, not this layer's. Throws BackendRequestError on failure. */
+  getLiveMetricsText(): Promise<string>;
 }
+
+/**
+ * Tagged outcome of a real GET /kv/{key} call -- see internal/api/kv.go's
+ * handleKVGet for the exact status codes this mirrors. 'bytes' is the raw
+ * response body, only present on 'found'; decoding it (UTF-8 vs binary)
+ * is left to the caller (see hooks/useKvConsole.ts) since this layer must
+ * not decide how a binary value gets displayed.
+ */
+export type LiveKvGetResult =
+  | { kind: 'found'; status: 200; bytes: Uint8Array; clientLatencyMs: number }
+  | { kind: 'not_found'; status: 404; clientLatencyMs: number }
+  | { kind: 'not_leader'; status: 421; leaderId?: string; leaderHttp?: string; clientLatencyMs: number }
+  | { kind: 'read_unavailable'; status: 503; reason: string; clientLatencyMs: number }
+  | { kind: 'error'; status: number; statusText: string; detail: string; clientLatencyMs: number };
+
+/** Tagged outcome of a real PUT or DELETE /kv/{key} call. */
+export type LiveKvWriteResult =
+  | { kind: 'ok'; status: 200; backendStatus: string; clientLatencyMs: number }
+  | { kind: 'not_leader'; status: 421; leaderId?: string; leaderHttp?: string; clientLatencyMs: number }
+  | { kind: 'error'; status: number; statusText: string; detail: string; clientLatencyMs: number };
 
 /** Thrown by the live-backend methods: non-2xx responses, network failures, and malformed JSON all produce one of these with a human-readable message, never a silently "healthy" result. */
 export class BackendRequestError extends Error {
@@ -136,6 +179,106 @@ async function requestJson<T>(path: string): Promise<T> {
   } catch (err) {
     throw new BackendRequestError(`malformed JSON response from ${path}`, err);
   }
+}
+
+function kvPath(key: string): string {
+  return `/kv/${encodeURIComponent(key)}`;
+}
+
+/**
+ * 502 Bad Gateway is never a response the ForgeDB handler itself can
+ * produce (see internal/api/kv.go -- every status it writes is 200, 400,
+ * 404, 413, 421, 500, 503, or 504); it is Vite's dev proxy's own signal
+ * that it could not reach the upstream at all (connection refused), the
+ * same condition as a direct network failure. Treating it as a generic
+ * 'error' kind would show it as a live-but-broken response instead of
+ * triggering the mock fallback a genuinely unreachable backend should --
+ * so this is promoted to a thrown BackendRequestError right alongside an
+ * actual fetch() failure, before either KV helper inspects the status.
+ */
+function assertProxyReachedBackend(res: Response, path: string): void {
+  if (res.status === 502) {
+    throw new BackendRequestError(`backend unreachable: the dev proxy could not reach ForgeDB for ${path}`);
+  }
+}
+
+/** HTTP status -> this UI's own short status text, since several of these paths (404/413/500/504) come back as plain text, not JSON, with no statusText worth reusing. */
+function kvStatusText(status: number, fallback: string): string {
+  switch (status) {
+    case 404:
+      return 'NOT FOUND';
+    case 413:
+      return 'PAYLOAD TOO LARGE';
+    case 504:
+      return 'TIMEOUT';
+    case 500:
+      return 'INTERNAL ERROR';
+    default:
+      return fallback || `HTTP ${status}`;
+  }
+}
+
+async function liveKvGet(key: string): Promise<LiveKvGetResult> {
+  const start = performance.now();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_PATH}${kvPath(key)}`, { method: 'GET' });
+  } catch (err) {
+    throw new BackendRequestError(
+      `network error contacting GET ${kvPath(key)}: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
+  }
+  assertProxyReachedBackend(res, kvPath(key));
+  const clientLatencyMs = performance.now() - start;
+
+  if (res.status === 200) {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return { kind: 'found', status: 200, bytes, clientLatencyMs };
+  }
+  if (res.status === 404) {
+    return { kind: 'not_found', status: 404, clientLatencyMs };
+  }
+  if (res.status === 421) {
+    const body = (await res.json().catch(() => null)) as BackendNotLeaderResponse | null;
+    return { kind: 'not_leader', status: 421, leaderId: body?.leader_id, leaderHttp: body?.leader_http, clientLatencyMs };
+  }
+  if (res.status === 503) {
+    const body = (await res.json().catch(() => null)) as BackendReadUnavailableResponse | null;
+    return { kind: 'read_unavailable', status: 503, reason: body?.reason ?? body?.error ?? 'read unavailable', clientLatencyMs };
+  }
+  const detail = await res.text().catch(() => '');
+  return { kind: 'error', status: res.status, statusText: kvStatusText(res.status, res.statusText), detail, clientLatencyMs };
+}
+
+async function liveKvWrite(key: string, method: 'PUT' | 'DELETE', body?: string): Promise<LiveKvWriteResult> {
+  const start = performance.now();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_PATH}${kvPath(key)}`, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/octet-stream' } : undefined,
+      body,
+    });
+  } catch (err) {
+    throw new BackendRequestError(
+      `network error contacting ${method} ${kvPath(key)}: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
+  }
+  assertProxyReachedBackend(res, kvPath(key));
+  const clientLatencyMs = performance.now() - start;
+
+  if (res.status === 200) {
+    const parsed = (await res.json().catch(() => null)) as BackendKvWriteResponse | null;
+    return { kind: 'ok', status: 200, backendStatus: parsed?.status ?? 'ok', clientLatencyMs };
+  }
+  if (res.status === 421) {
+    const body2 = (await res.json().catch(() => null)) as BackendNotLeaderResponse | null;
+    return { kind: 'not_leader', status: 421, leaderId: body2?.leader_id, leaderHttp: body2?.leader_http, clientLatencyMs };
+  }
+  const detail = await res.text().catch(() => '');
+  return { kind: 'error', status: res.status, statusText: kvStatusText(res.status, res.statusText), detail, clientLatencyMs };
 }
 
 function mapBackendHealth(raw: BackendHealthResponse): { status: string; nodeId: string } {
@@ -273,5 +416,29 @@ export const forgedbApi: ForgeDbApi = {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  },
+  async getLiveKv(key) {
+    return liveKvGet(key);
+  },
+  async putLiveKv(key, value) {
+    return liveKvWrite(key, 'PUT', value);
+  },
+  async deleteLiveKv(key) {
+    return liveKvWrite(key, 'DELETE');
+  },
+  async getLiveMetricsText() {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE_PATH}/metrics`);
+    } catch (err) {
+      throw new BackendRequestError(
+        `network error contacting /metrics: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      );
+    }
+    if (!res.ok) {
+      throw new BackendRequestError(`backend returned ${res.status} ${res.statusText} for /metrics`);
+    }
+    return res.text();
   },
 };

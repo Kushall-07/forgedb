@@ -1,6 +1,7 @@
 import type { KVOperation } from '../../types/kv';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StatusIndicator, type StatusTone } from '../ui/StatusIndicator';
+import { DataSourceBadge } from '../ui/DataSourceBadge';
 import './KVOperationTable.css';
 
 interface KVOperationTableProps {
@@ -24,7 +25,7 @@ const OP_TONE: Record<KVOperation['operation'], string> = {
 export function KVOperationTable({ operations }: KVOperationTableProps) {
   return (
     <section className="kv-op-table" aria-label="Recent operations">
-      <SectionHeader eyebrow="History" title="Recent Operations" description="The last KV requests issued against the mock cluster, newest first." />
+      <SectionHeader eyebrow="History" title="Recent Operations" description="The last KV requests issued from this console, newest first. Source distinguishes a real ForgeDB response from a mock fallback." />
 
       <div className="kv-op-table__wrap panel" data-sc-in>
         <table className="kv-op-table__table">
@@ -37,6 +38,7 @@ export function KVOperationTable({ operations }: KVOperationTableProps) {
               <th scope="col">Status</th>
               <th scope="col">Latency</th>
               <th scope="col">Consistency</th>
+              <th scope="col">Source</th>
               <th scope="col">Request ID</th>
             </tr>
           </thead>
@@ -52,6 +54,9 @@ export function KVOperationTable({ operations }: KVOperationTableProps) {
                 </td>
                 <td className="mono">{op.latencyMs.toFixed(1)} ms</td>
                 <td className="mono">{op.consistency}</td>
+                <td>
+                  <DataSourceBadge status={op.source} />
+                </td>
                 <td className="mono kv-op-table__id">{op.id}</td>
               </tr>
             ))}

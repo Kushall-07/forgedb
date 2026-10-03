@@ -42,7 +42,7 @@ export function KVValueInspector({ entryKey, entry }: KVValueInspectorProps) {
               </div>
               <div className="kv-value-inspector__field">
                 <TechnicalLabel>Raft Log Index</TechnicalLabel>
-                <span className="mono">{entry.raftLogIndex}</span>
+                <span className="mono">{entry.raftLogIndex ?? 'NOT EXPOSED'}</span>
               </div>
               <div className="kv-value-inspector__field">
                 <TechnicalLabel>Last Updated</TechnicalLabel>
@@ -54,6 +54,10 @@ export function KVValueInspector({ entryKey, entry }: KVValueInspectorProps) {
               <TechnicalLabel as="div">Value</TechnicalLabel>
               {isTombstone ? (
                 <div className="kv-value-inspector__tombstone mono">TOMBSTONE — value cleared</div>
+              ) : entry.isBinary ? (
+                <div className="kv-value-inspector__tombstone mono">BINARY DATA — {entry.sizeBytes} bytes, not valid UTF-8, not displayed</div>
+              ) : entry.valueType === 'STRING' ? (
+                <pre className="kv-value-inspector__value-block mono">{entry.value as string}</pre>
               ) : (
                 <pre className="kv-value-inspector__value-block mono">{JSON.stringify(entry.value, null, 2)}</pre>
               )}

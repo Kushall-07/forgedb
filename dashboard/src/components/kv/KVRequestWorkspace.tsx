@@ -66,7 +66,7 @@ export function KVRequestWorkspace({
 
   return (
     <section className="kv-workspace" aria-label="Request workspace">
-      <SectionHeader eyebrow="Workspace" title="Request Workspace" description="Build and execute a KV operation against the mock cluster." />
+      <SectionHeader eyebrow="Workspace" title="Request Workspace" description="Build and execute a KV operation against ForgeDB -- live when the target is reachable, mock otherwise." />
 
       <form
         className="kv-workspace__panel panel"
@@ -212,7 +212,7 @@ export function KVRequestWorkspace({
         ) : isExecuting ? (
           <div className="kv-workspace__status kv-workspace__status--executing" role="status">
             <span className="mono kv-workspace__status-title">EXECUTING REQUEST</span>
-            <span className="kv-workspace__status-body">Submitting mock request&hellip;</span>
+            <span className="kv-workspace__status-body">Submitting request&hellip;</span>
           </div>
         ) : null}
 

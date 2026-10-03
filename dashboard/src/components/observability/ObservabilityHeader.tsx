@@ -1,6 +1,7 @@
 import { Activity, RefreshCw } from 'lucide-react';
 import type { ObservabilityTimeRange } from '../../types/observability';
-import { StatusIndicator } from '../ui/StatusIndicator';
+import type { BackendStatus } from '../../hooks/useBackendCluster';
+import { DataSourceBadge } from '../ui/DataSourceBadge';
 import './ObservabilityHeader.css';
 
 const RANGES: ObservabilityTimeRange[] = ['AUTO', '5M', '15M', '1H'];
@@ -8,10 +9,12 @@ const RANGES: ObservabilityTimeRange[] = ['AUTO', '5M', '15M', '1H'];
 interface ObservabilityHeaderProps {
   range: ObservabilityTimeRange;
   onRangeChange: (range: ObservabilityTimeRange) => void;
+  /** Status of the Live Metrics panel's GET /metrics poll -- this badge is about that one live surface, not a claim that every panel on the page is live (most still are not; see DataProvenance). */
+  backendStatus: BackendStatus;
 }
 
 /** Compact page header, not a hero: this console is read many times a day. */
-export function ObservabilityHeader({ range, onRangeChange }: ObservabilityHeaderProps) {
+export function ObservabilityHeader({ range, onRangeChange, backendStatus }: ObservabilityHeaderProps) {
   return (
     <section className="observability-header" aria-label="Observability header" data-sc-in>
       <div className="observability-header__identity">
@@ -44,10 +47,10 @@ export function ObservabilityHeader({ range, onRangeChange }: ObservabilityHeade
 
         <span className="observability-header__refresh mono">
           <RefreshCw size={13} strokeWidth={2} aria-hidden="true" />
-          Static snapshot
+          {backendStatus === 'live' ? 'Polling every 10s' : 'Static snapshot'}
         </span>
 
-        <StatusIndicator tone="warn" label="Mock telemetry" size="sm" />
+        <DataSourceBadge status={backendStatus} />
       </div>
     </section>
   );
