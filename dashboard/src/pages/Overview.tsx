@@ -1,4 +1,5 @@
 import { useScrollCraft } from '../lib/scrollcraft/useScrollCraft';
+import { useBackendCluster } from '../hooks/useBackendCluster';
 import { ClusterSummary } from '../components/overview/ClusterSummary';
 import { ClusterTopology } from '../components/overview/ClusterTopology';
 import { EventTimeline } from '../components/overview/EventTimeline';
@@ -9,14 +10,15 @@ import { SystemHealth } from '../components/overview/SystemHealth';
 
 export default function Overview() {
   const scopeRef = useScrollCraft<HTMLDivElement>();
+  const backend = useBackendCluster();
 
   return (
     <div ref={scopeRef}>
-      <ClusterSummary />
+      <ClusterSummary cluster={backend.cluster} status={backend.status} />
       <ClusterTopology />
       <RaftPipeline />
       <ReplicationStatus />
-      <StorageSnapshot />
+      <StorageSnapshot storage={backend.storage} status={backend.status} />
       <EventTimeline />
       <SystemHealth />
     </div>

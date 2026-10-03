@@ -1,9 +1,24 @@
-import { cluster, nodes } from '../../data/mockCluster';
+import { nodes } from '../../data/mockCluster';
 import { MetricValue } from '../ui/MetricValue';
-import { StatusIndicator } from '../ui/StatusIndicator';
+import { DataSourceBadge } from '../ui/DataSourceBadge';
+import type { BackendStatus } from '../../hooks/useBackendCluster';
+import type { ClusterState } from '../../types/cluster';
 import './ClusterSummary.css';
 
-export function ClusterSummary() {
+interface ClusterSummaryProps {
+  cluster: ClusterState;
+  status: BackendStatus;
+}
+
+/**
+ * Leader/Term/Commit Index/Last Applied/Last Log Index come from `cluster`,
+ * which is this node's live GET /cluster view when status is 'live' and the
+ * mock ClusterState otherwise (see hooks/useBackendCluster.ts). Node/leader
+ * COUNTS stay sourced from the mock 3-node roster unconditionally: /cluster
+ * is node-local (one node's own state), never a federated view of the
+ * cluster, so there is no real multi-node count to report yet.
+ */
+export function ClusterSummary({ cluster, status }: ClusterSummaryProps) {
   const leaderCount = nodes.filter((n) => n.role === 'leader').length;
 
   return (
@@ -15,9 +30,9 @@ export function ClusterSummary() {
           <p className="cluster-summary__subtitle">Consensus, replication, durability and cluster state.</p>
         </div>
         <div className="cluster-summary__badges">
-          <StatusIndicator tone="sync" label="Healthy" pulse />
-          <span className="cluster-summary__badge mono">{nodes.length} NODES</span>
-          <span className="cluster-summary__badge mono">{leaderCount} LEADER</span>
+          <DataSourceBadge status={status} />
+          <span className="cluster-summary__badge mono">{nodes.length} NODES (MOCK)</span>
+          <span className="cluster-summary__badge mono">{leaderCount} LEADER (MOCK)</span>
         </div>
       </div>
 

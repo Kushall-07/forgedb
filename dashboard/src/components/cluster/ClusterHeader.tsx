@@ -1,10 +1,22 @@
 import { Share2 } from 'lucide-react';
-import { cluster, nodes } from '../../data/mockCluster';
-import { StatusIndicator } from '../ui/StatusIndicator';
+import { nodes } from '../../data/mockCluster';
+import { DataSourceBadge } from '../ui/DataSourceBadge';
+import type { BackendStatus } from '../../hooks/useBackendCluster';
+import type { ClusterState } from '../../types/cluster';
 import './ClusterHeader.css';
 
-/** Compact page header, not a hero: this console is read many times a day. */
-export function ClusterHeader() {
+interface ClusterHeaderProps {
+  cluster: ClusterState;
+  status: BackendStatus;
+}
+
+/**
+ * Compact page header, not a hero: this console is read many times a day.
+ * TERM comes from the live node's own view when status is 'live' (see
+ * hooks/useBackendCluster.ts); the node/leader counts stay sourced from the
+ * mock 3-node roster, since GET /cluster is node-local, not federated.
+ */
+export function ClusterHeader({ cluster, status }: ClusterHeaderProps) {
   const leaderCount = nodes.filter((n) => n.role === 'leader').length;
 
   return (
@@ -21,10 +33,10 @@ export function ClusterHeader() {
       </div>
 
       <div className="cluster-header__badges">
-        <span className="cluster-header__badge mono">{nodes.length} NODES</span>
-        <span className="cluster-header__badge mono">{leaderCount} LEADER</span>
+        <span className="cluster-header__badge mono">{nodes.length} NODES (MOCK)</span>
+        <span className="cluster-header__badge mono">{leaderCount} LEADER (MOCK)</span>
         <span className="cluster-header__badge mono">TERM {cluster.term}</span>
-        <StatusIndicator tone="sync" label="Healthy" pulse />
+        <DataSourceBadge status={status} />
       </div>
     </section>
   );

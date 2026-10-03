@@ -26,6 +26,11 @@ import type {
   StorageTelemetryMetrics,
   SystemMetrics,
 } from '../types/observability';
+import type {
+  BackendClusterStatus,
+  BackendHealthResponse,
+  LiveNodeSnapshot,
+} from '../types/backend';
 
 /**
  * The future ForgeDB HTTP API boundary. Components in this phase read mock
@@ -50,14 +55,25 @@ import type {
  *   GET /observability/events    -> ObservabilityEvent[]
  *   GET /observability/incidents -> ObservabilityIncident[]
  *
- * No network calls are made here. Swapping the bodies below for `fetch(...)`
- * calls is the entire migration; no UI component needs to change. The KV
- * Console itself still reads src/data/mockKV.ts directly, and the Raft page
- * still reads src/data/mockRaft.ts directly, the same way Overview and
- * Cluster read src/data/mockCluster.ts, so this interface is documentation of
- * the target contract rather than code already on the render path. The
- * Observability page follows the same pattern, reading
+ * No network calls are made for most of the methods below: swapping their
+ * bodies for `fetch(...)` calls is the entire remaining migration, and no UI
+ * component needs to change when that happens. The KV Console itself still
+ * reads src/data/mockKV.ts directly, and the Raft page still reads
+ * src/data/mockRaft.ts directly, the same way Cluster's topology/replication
+ * views still read src/data/mockCluster.ts, so most of this interface
+ * remains documentation of the target contract rather than code already on
+ * the render path. The Observability page follows the same pattern, reading
  * src/data/mockObservability.ts directly rather than through this module.
+ *
+ * getLiveHealth/getLiveCluster/getLiveSnapshot are the one piece of this
+ * module that IS real: they call the actual ForgeDB /health and /cluster
+ * endpoints (through Vite's dev proxy at /api/*, see vite.config.ts, since
+ * the Go backend has no CORS middleware) and map the response into this
+ * module's types. They never fall back to mock data themselves -- they
+ * reject/resolve with an explicit 'unavailable' result on any failure, so a
+ * caller (see src/hooks/useBackendCluster.ts) decides whether and how to
+ * fall back, rather than this layer silently turning a failure into a
+ * healthy-looking result.
  */
 export interface ForgeDbApi {
   getCluster(): Promise<ClusterState>;
@@ -78,7 +94,104 @@ export interface ForgeDbApi {
   getNodeHealth(): Promise<NodeHealthRecord[]>;
   getObservabilityEvents(): Promise<ObservabilityEvent[]>;
   getActiveIncidents(): Promise<ObservabilityIncident[]>;
+  /** Real GET /health, mapped. Throws BackendRequestError on failure. */
+  getLiveHealth(): Promise<{ status: string; nodeId: string }>;
+  /** Real GET /cluster, mapped into this node's ClusterState + LiveNodeSnapshot view. Throws BackendRequestError on failure. */
+  getLiveCluster(): Promise<{ cluster: ClusterState; node: LiveNodeSnapshot }>;
+  /** Both of the above in parallel, collapsed into a tagged result instead of throwing -- the shape src/hooks/useBackendCluster.ts consumes directly. */
+  getLiveSnapshot(): Promise<LiveSnapshot>;
 }
+
+/** Thrown by the live-backend methods: non-2xx responses, network failures, and malformed JSON all produce one of these with a human-readable message, never a silently "healthy" result. */
+export class BackendRequestError extends Error {
+  readonly cause?: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'BackendRequestError';
+    this.cause = cause;
+  }
+}
+
+const API_BASE_PATH = '/api';
+
+async function requestJson<T>(path: string): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_PATH}${path}`, { headers: { Accept: 'application/json' } });
+  } catch (err) {
+    throw new BackendRequestError(
+      `network error contacting ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new BackendRequestError(
+      `backend returned ${res.status} ${res.statusText} for ${path}${body ? ` -- ${body}` : ''}`,
+    );
+  }
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    throw new BackendRequestError(`malformed JSON response from ${path}`, err);
+  }
+}
+
+function mapBackendHealth(raw: BackendHealthResponse): { status: string; nodeId: string } {
+  return { status: raw.status, nodeId: raw.node_id };
+}
+
+/**
+ * Maps GET /cluster's node-local dbnode.Status into this node's own
+ * ClusterState view. leader resolves to raft.LeaderID when known, falling
+ * back to this node's own id only when it has no leader on record yet (an
+ * empty LeaderID, e.g. before the first election) -- never a guess at who
+ * the actual leader is.
+ */
+function mapBackendClusterState(raw: BackendClusterStatus): ClusterState {
+  const r = raw.raft;
+  return {
+    leader: r.LeaderID || r.NodeID,
+    term: r.Term,
+    commitIndex: r.CommitIndex,
+    lastApplied: r.LastApplied,
+    lastLogIndex: r.LastLogIndex,
+    lastLogTerm: r.LastLogTerm,
+    snapshotIndex: r.SnapshotIndex,
+  };
+}
+
+function mapBackendLiveNode(raw: BackendClusterStatus): LiveNodeSnapshot {
+  const r = raw.raft;
+  return {
+    nodeId: r.NodeID,
+    role: r.Role,
+    leaderId: r.LeaderID,
+    term: r.Term,
+    commitIndex: r.CommitIndex,
+    lastApplied: r.LastApplied,
+    lastLogIndex: r.LastLogIndex,
+    lastLogTerm: r.LastLogTerm,
+    snapshotIndex: r.SnapshotIndex,
+    snapshotTerm: r.SnapshotTerm,
+    memtableEntries: raw.storage.memtable_entries,
+    memtableBytes: raw.storage.memtable_bytes,
+    processUptimeSeconds: raw.process_uptime_seconds,
+  };
+}
+
+export type LiveSnapshot =
+  | {
+      source: 'live';
+      health: { status: string; nodeId: string };
+      cluster: ClusterState;
+      node: LiveNodeSnapshot;
+    }
+  | {
+      source: 'unavailable';
+      error: string;
+    };
 
 export const forgedbApi: ForgeDbApi = {
   async getCluster() {
@@ -134,5 +247,31 @@ export const forgedbApi: ForgeDbApi = {
   },
   async getActiveIncidents() {
     return activeIncidents;
+  },
+  async getLiveHealth() {
+    return mapBackendHealth(await requestJson<BackendHealthResponse>('/health'));
+  },
+  async getLiveCluster() {
+    const raw = await requestJson<BackendClusterStatus>('/cluster');
+    return { cluster: mapBackendClusterState(raw), node: mapBackendLiveNode(raw) };
+  },
+  async getLiveSnapshot() {
+    try {
+      const [health, clusterRaw] = await Promise.all([
+        requestJson<BackendHealthResponse>('/health'),
+        requestJson<BackendClusterStatus>('/cluster'),
+      ]);
+      return {
+        source: 'live',
+        health: mapBackendHealth(health),
+        cluster: mapBackendClusterState(clusterRaw),
+        node: mapBackendLiveNode(clusterRaw),
+      };
+    } catch (err) {
+      return {
+        source: 'unavailable',
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   },
 };
