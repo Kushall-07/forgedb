@@ -180,7 +180,7 @@ No project is finished, and pretending otherwise just wastes the next person's t
 - Cluster membership is static — adding or removing a node requires restarting the cluster with a new configuration.
 - Inter-node gRPC traffic is plaintext, and there's one shared bearer token with no per-caller scopes or rotation.
 - Deployed (non-dev) dashboard builds can't safely hold a bearer token, so their live data is limited to `/health`.
-- The documented deployment topology runs on a single host; Azure/public-endpoint status is not independently verified in this release.
+- The documented deployment topology runs on a single host. Public-endpoint reachability, auth/CORS enforcement, a public KV PUT/GET/DELETE cycle, and a live leader failover were independently verified through a public endpoint on the Azure VM — but that verification used a Cloudflare Quick Tunnel, not a stable DNS hostname with Caddy-terminated HTTPS (Section 18 of `deploy/README.md`), so it does not demonstrate permanent public availability.
 - `-race` testing is blocked on this Windows development environment because the required C/gcc toolchain isn't present — a local toolchain gap, not a known ForgeDB data race.
 - There's no automatic snapshot policy yet — `/admin/snapshot` has to be triggered manually by an operator.
 
