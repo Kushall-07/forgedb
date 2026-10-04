@@ -1,529 +1,177 @@
-# ForgeDB
+<div align="center">
 
-Distributed Key-Value Database Engine with Raft Consensus
+# ⚡ ForgeDB
 
-## Overview
+**A distributed key-value database engine built from scratch in Go, using Raft consensus to replicate writes across a cluster and survive node failures.**
 
-ForgeDB is a from-scratch, replicated key-value store built around a
-real Raft consensus implementation: persistent log replication, leader
-election, a deduplicating state machine, log-structured local storage
-with a write-ahead log, snapshot-based log compaction (including
-chunked snapshot transfer for large state), a leader-aware HTTP
-gateway, token authentication, and a React dashboard for operating and
-observing a running cluster. It ships with a Docker Compose deployment
-for a local 3-node cluster and documented steps for a public, Caddy +
-Cloudflare-fronted deployment on a single Azure VM.
+<p>
+  <img src="https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" />
+  <img src="https://img.shields.io/badge/Raft-Consensus-6f42c1?style=for-the-badge" alt="Raft Consensus" />
+  <img src="https://img.shields.io/badge/gRPC-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white" alt="gRPC" />
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React" />
+  <img src="https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white" alt="Prometheus" />
+</p>
+<p>
+  <img src="https://img.shields.io/badge/Tests-25%20packages-success?style=for-the-badge" alt="Tests" />
+  <img src="https://img.shields.io/badge/Release-v1.0.0-informational?style=for-the-badge" alt="Release v1.0.0" />
+</p>
 
-This README reflects what has actually been built, tested, and
-verified as of this release. Where a component exists in the tree but
-is not on the live request path, or where a deployment property is
-aspirational rather than currently running, that distinction is called
-out explicitly rather than implied away.
+### 🗺️ System Architecture
 
-## Why ForgeDB
+<img src="docs/architecture/forgedb-architecture.png" alt="ForgeDB architecture: client to HTTP API to leader-aware gateway to Raft cluster to replicated log to majority commit to state machine to WAL/MemTable storage, with a separate snapshot/recovery path and dashboard" width="850" />
 
-ForgeDB exists to demonstrate the full, unglamorous middle of building
-a distributed database: not just "Raft works" in isolation, but Raft
-wired to a real durable storage engine, a deduplicating state machine
-that survives restarts and retries, snapshotting that doesn't corrupt
-state under interruption, a gateway that tracks leadership changes
-without client-side retry logic, and a dashboard that is honest about
-which of its numbers come from a live node versus illustrative mock
-data. Each of these is independently easy to fake; ForgeDB's test
-suite (chaos scenarios, a linearizability checker, and real 3-node
-Docker failover) is built specifically to make faking them hard.
+</div>
 
-## Architecture
+A normal key-value store saves data on one machine. ForgeDB explores what happens once that machine is no longer allowed to be the single source of truth — writes have to survive a crashed leader, a restarted node, and a retried request, without losing or duplicating anything.
 
-```
-                    Client
-                      |
-                      v
-                HTTP API
-                      |
-                      v
-              Leader-Aware Gateway
-                      |
-                      v
-              +---------------+
-              |  Raft Cluster |
-              +---------------+
-                /      |      \
-               /       |       \
-            Node 1   Node 2   Node 3
-               \       |       /
-                \      |      /
-                 Replicated Log
-                       |
-                 Majority Commit
-                       |
-                 State Machine
-                       |
-                 Persistent Storage
-```
+---
 
-Storage path (per node):
+## What is ForgeDB?
 
-```
-    WAL
-     |
-     v
-    MemTable
-     |
-     v
-    Immutable MemTable
-     |
-     v
-    SSTables  --> Bloom filters, Indexes   [implemented, NOT on live write path]
-     |
-     v
-    Manifest / Version State                [implemented, NOT on live write path]
-     |
-     v
-    Compaction                              [implemented, NOT on live write path]
-```
+- **Multiple nodes** (3 by default), each holding a full copy of the data.
+- **One leader at a time** — only the leader accepts writes.
+- Every write is **replicated** to followers and only counts as **committed** once a **majority** has it.
+- Committed writes are applied to a **state machine** and persisted locally, so they survive a restart.
+- If the leader crashes, the cluster **elects a new one** and keeps accepting writes — clients don't notice.
+- The old leader **recovers** from disk and catches back up automatically.
 
-**Important:** `internal/storage/sstable`, `internal/storage/manifest`,
-and `internal/storage/compaction` are real, independently tested
-packages, but `storage.MemStore` (the implementation actually wired
-into `dbnode.Node`) never calls into any of them. The live write path
-today is:
+That's Raft, in six bullets. Everything below is how ForgeDB actually implements it — and which parts are tested against a real cluster versus implemented but not yet load-bearing.
 
-```
-Propose -> Raft commit -> Applier.ApplyAvailable -> KVStateMachine.Apply
-  -> storage.MemStore.Put/Delete -> WAL Append+Sync -> MemTable
+## Why is this interesting?
+
+Not just "HTTP API + map + database." Each of these is individually easy to fake — ForgeDB's test suite (chaos scenarios, a linearizability checker, real 3-node Docker failover) is built to make faking them hard.
+
+| Capability | Why it matters |
+|---|---|
+| 🧠 **Raft consensus** | Prevents two nodes from independently accepting conflicting writes |
+| 🛡️ **Majority commit** | A write isn't durable until a quorum has it, not just one node |
+| 🔄 **Request deduplication** | Retries after a timeout/leader change can't double-apply a write |
+| 📡 **Leader-aware gateway** | Clients never need to track which node is currently leader |
+| 📸 **Snapshots + chunked transfer** | Log compaction and recovery without one unbounded RPC payload |
+| 🧪 **Chaos + linearizability testing** | Failures are injected and checked against a reference model, not assumed |
+
+## What makes it different?
+
+| Typical single-node CRUD project | ForgeDB |
+|---|---|
+| Single process, one source of state | Multi-node cluster, replicated Raft log |
+| Writes go straight to disk | Writes pass through consensus first |
+| No leader election | Raft leader election + term safety |
+| Restart loses in-memory state | WAL + snapshot recovery |
+| Failure rarely tested | Real `docker stop` leader-failure testing |
+| Client must know the backend address | Leader-aware gateway abstracts it away |
+
+## Verified capabilities
+
+✅ = verified against a real 3-node Docker cluster in this release. ⚙️ = implemented and unit/integration tested, not yet exercised live.
+
+| | |
+|---|---|
+| ✅ Leader election, majority commit | ✅ Leader failure → re-election → gateway reroute |
+| ✅ Old-leader rejoin + commit-index catch-up | ✅ Bearer-token auth (401/200 paths) |
+| ✅ Prometheus `/metrics` under real traffic | ✅ Graceful shutdown (SIGTERM) |
+| ✅ Snapshot creation (manual trigger) | ⚙️ WAL crash recovery |
+| ⚙️ Chunked snapshot transfer (corruption/gap/dup/overflow) | ⚙️ Request deduplication across restarts |
+| ⚙️ Linearizability checker | ⚙️ Chaos testing (crashes, partitions) |
+
+## What happens when the leader dies?
+
+```text
+Node 1 (leader) fails  →  Raft election  →  Node 2 or 3 becomes leader
+     →  Gateway follows the new leader, writes continue
+     →  Node 1 restarts, rejoins as a follower, catches up
 ```
 
-Durability on the live path comes from the WAL plus Raft's replicated,
-persisted log — not from SSTables. See `benchmark/README.md`'s "What
-the live write path actually exercises" section for the exact
-reasoning and the tests this is based on.
+Tested with a real `docker stop` on the live leader — not a simulation. Pre- and post-failover writes stayed intact throughout.
 
-Snapshot path:
+## Storage engine
 
-```
-    Raft Snapshot
-          |
-          v
-    Chunked Transfer
-          |
-          v
-    Per-chunk Validation (checksum, gap/duplicate/overflow detection)
-          |
-          v
-    Complete Snapshot
-          |
-          v
-    Existing Snapshot Validation
-          |
-          v
-    Atomic Persistence
-          |
-          v
-    Snapshot Boundary
-          |
-          v
-    State Machine Restoration
-```
+**Live write path:** `Raft commit → State Machine → MemStore → WAL (fsync) → MemTable`. Durability comes from the WAL plus Raft's own replicated log.
 
-Public deployment architecture (as documented; see Deployment and
-Known Limitations below for what is currently actually running):
-
-```
-    ForgeDB Dashboard
-          |
-        Vercel
-          |
-    Cloudflare Quick Tunnel
-          |
-       Azure VM
-          |
-        Caddy
-          |
-    ForgeDB Gateway
-          |
-     Current Raft Leader
-          |
-      3-node cluster
-```
-
-## Raft Consensus
-
-`internal/raft` implements leader election, persistent log replication,
-AppendEntries/RequestVote/InstallSnapshot RPCs, majority-based commit
-advancement, term-based safety (at most one leader per term, stale-term
-rejection, higher-term step-down), and snapshot-aware log truncation at
-an exact boundary. It has no dependency on any particular transport
-(`internal/transport` carries it over gRPC in production;
-`InMemoryTransport` carries it in-process for tests and benchmarks) or
-storage backend (`FilePersister` for production, `MemoryPersister` for
-tests).
-
-Verified in this pass: a real 3-node Docker cluster survives a leader
-`docker stop`, elects a new leader, continues accepting writes through
-the same gateway address, and the old leader rejoins as a follower and
-catches up to the cluster's commit index after restart (see Testing
-below).
-
-## Storage Engine
-
-Each node's local storage (`internal/storage`) is a WAL-backed MemTable
-(`storage.MemStore`): every Put/Delete is appended to the WAL, fsynced,
-and applied to an in-memory table before the call returns. Crash
-recovery (`internal/recovery` logic inside `internal/storage/wal`)
-replays the WAL on restart, including a torn/partial final record. A
-complete LSM pipeline exists as independently tested components
-(`internal/storage/sstable`, `internal/storage/manifest`,
-`internal/storage/compaction`) but is not wired into the live write
-path — see Architecture above.
-
-## State Machine and Request Deduplication
-
-`internal/statemachine` applies committed Raft log entries to the
-storage layer exactly once, keyed by client-supplied request IDs, so a
-client or gateway retry after a timeout or leader change cannot
-duplicate a write. This dedup state is itself part of what a snapshot
-captures and a restart recovers, verified by
-`internal/dbnode`'s restart/convergence test suite
-(`TestNode_FullClusterRestart_ConvergesToRecoveredState`,
-`TestNode_RepeatedSnapshotRestartCycles_StateCorrect`, and related
-tests).
-
-## Consistency Model
-
-Writes go through Raft and are only visible once committed by a
-majority and applied locally. Reads can be served two ways:
-
-- A plain `GET` against a follower or the leader returns that node's
-  locally applied state (bounded staleness on a follower).
-- `ConsistentGet` (used internally for linearizable reads) performs a
-  Raft `ReadIndex` round before reading, so the result reflects every
-  write committed up to the point the read was issued, even when
-  served from the current leader rather than a quorum round-trip per
-  read.
-
-`correctness/` includes a linearizability checker that replays
-recorded concurrent histories (including failures, retries, and leader
-changes) against a reference model and confirms no observed
-anomaly is possible under any legal linearization.
-
-## Snapshots and Recovery
-
-A node snapshots its state machine on operator request
-(`POST /admin/snapshot`), recording a `(index, term)` boundary,
-persisting the snapshot atomically, and compacting the Raft log up to
-that boundary only after the snapshot itself is durably saved — a
-save failure at either step leaves the prior state intact rather than
-a torn boundary (`TestCreateSnapshot_SnapshotSaveFailure_LeavesLogUntouched`,
-`TestCreateSnapshot_LogSaveFailure_RollsBackCompactionButKeepsSnapshot`).
-Restart reconstructs the log either from a snapshot alone, from a
-snapshot plus a suffix of log entries with correct overlap handling, or
-fails closed on a corrupted snapshot file rather than silently losing
-data.
-
-## Chunked Snapshot Transfer
-
-When a follower is far enough behind that the leader can no longer
-serve it from its log, the leader transfers its snapshot in bounded
-chunks (`InstallSnapshot` with offset/chunk semantics) rather than one
-unbounded RPC payload. The transfer protocol is covered by a dedicated
-test suite exercising: multi-chunk reconstruction byte-for-byte,
-corrupted-chunk rejection, missing-chunk-gap rejection, duplicate-chunk
-rejection, overflow-beyond-declared-total rejection, an incomplete
-transfer never activating as a durable snapshot, a restart during an
-in-progress transfer not resurrecting the partial data, a newer
-snapshot correctly superseding an older in-flight transfer, and an
-existing good snapshot surviving a failed incoming transfer untouched.
-All of these were re-run and passed in this release (see Testing).
-
-## Failure Handling
-
-Demonstrated in this pass against a real 3-node Docker cluster (not a
-simulation): leader crash → election → gateway reroutes writes to the
-new leader with no client-visible API change → old leader restarts,
-rejoins as a follower, and catches up to the cluster's commit index,
-with both pre- and post-failover writes intact throughout. Graceful
-shutdown (`docker stop`, i.e. SIGTERM) was verified to drain cleanly —
-HTTP, Raft, and storage all report a stopped state with no error in the
-logs — and the node recovers cleanly from the WAL and its last snapshot
-on restart.
-
-## Observability
-
-Every node exposes Prometheus-format metrics at `GET /metrics`
-(protected, like every endpoint except `/health`/`/ready`): Raft
-election/term/commit counters, AppendEntries send/success/fail
-counters, replication and commit counters, snapshot
-created/installed counters, and per-component error counters, among
-others. The dashboard's Observability page parses this text directly
-(`dashboard/src/lib/metrics/parsePrometheusText.ts`) rather than a
-separate structured API. Verified in this pass: a live 3-node cluster's
-`/metrics` endpoint returns well-formed Prometheus text reflecting real
-election/replication activity generated during the failover test.
+The repo also contains independently tested **SSTable**, **Manifest**, and **Compaction** packages — implemented, but **not wired into the live write path**. This is a deliberate scope boundary, not an oversight (see [Future Work](#future-work)).
 
 ## API
 
-Router source of truth: `internal/api/server.go`.
-
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/health` | none | Liveness; always 200 while the process is up. |
-| GET | `/ready` | none | Readiness. |
-| GET | `/metrics` | Bearer | Prometheus text exposition. |
-| GET | `/cluster` | Bearer | This node's Raft/storage status (role, term, indices, peer lag when leader). |
-| GET | `/kv/{key}` | Bearer | 200 + raw bytes, 404 not found, 421 not-leader (with `leader_id`/`leader_http` hint) on a linearizable-read path, 503 if a read can't currently be served. |
-| PUT | `/kv/{key}` | Bearer | Body is the value, sent verbatim. 421 not-leader hint on a follower. |
-| DELETE | `/kv/{key}` | Bearer | 421 not-leader hint on a follower. |
-| POST | `/admin/snapshot` | Bearer | Triggers a snapshot at the node's current `LastApplied` index. |
+| GET | `/health`, `/ready` | none | Liveness / readiness |
+| GET | `/metrics` | Bearer | Prometheus text |
+| GET | `/cluster` | Bearer | Role, term, indices |
+| GET / PUT / DELETE | `/kv/{key}` | Bearer | 421 + leader hint if not leader |
+| POST | `/admin/snapshot` | Bearer | Manual snapshot trigger |
 
-Authentication: `Authorization: Bearer YOUR_TOKEN`, checked by
-`internal/api/auth.go` before any protected handler runs. The gateway
-(`internal/gateway`) does not itself hold or check the token — it
-forwards whatever `Authorization` header the client sent, unchanged, to
-whichever node currently answers as leader; that node's own middleware
-is still the only thing that validates it.
-
-CORS is governed by `FORGEDB_CORS_ORIGINS` (exact-origin allow-list,
-empty by default — i.e. disabled unless explicitly configured); see
-`internal/api/cors.go`.
+Auth: `Authorization: Bearer <token>`. CORS: exact-origin allow-list via `FORGEDB_CORS_ORIGINS`, disabled by default.
 
 ## Dashboard
 
-`dashboard/` is a Vite + React + TypeScript app with pages for an
-overview, cluster topology, a Raft internals explorer, a KV console,
-and observability. Most pages currently render from `src/data/mock*.ts`
-and are labeled as such in the UI; the service layer
-(`src/services/forgedbApi.ts`) defines the full intended live contract
-and already implements real calls for health, cluster status, KV
-read/write/delete, and raw metrics text, each with its own tagged
-success/failure result type so a caller can distinguish "the backend
-legitimately said not-found/not-leader" from "the backend could not be
-reached" and decide whether to fall back to mock data. `useBackendCluster`
-and `useKvConsole` are the hooks that make that decision for the
-Overview/Cluster and KV Console pages respectively.
+React + TypeScript UI for cluster topology, KV console, Raft internals, and metrics. Local dev (`npm run dev`) proxies the bearer token server-side for genuinely live data. **A deployed build (e.g. Vercel) has no server-side proxy, so live authenticated data is a local-dev-only capability today** — see [Limitations](#limitations).
 
-**Authentication note (fixed in this release):** every protected
-backend endpoint requires a bearer token, but the dashboard's browser
-code deliberately never attaches one — doing so would bake a real
-`FORGEDB_API_TOKEN` into the publicly readable built JS bundle. Before
-this release, that meant the dashboard's "live" mode could only ever
-successfully reach the one unauthenticated endpoint, `/health`; `/cluster`,
-`/kv/*`, and `/metrics` would 401 even in local development.
-`dashboard/vite.config.ts`'s dev-only proxy now reads a non-`VITE_`-
-prefixed `FORGEDB_API_TOKEN` from a local, untracked `dashboard/.env`
-(server-side, in Node — never inlined into client code) and attaches it
-to proxied requests, so a developer running `npm run dev` against a
-real local cluster now gets genuinely live Cluster/KV/Observability
-data. This fix is local-dev-only by design: a deployed build (e.g. on
-Vercel) still has no server-side proxy to attach a token through, so
-its "live" mode is still limited to `/health` unless and until a proper
-backend-for-frontend/session layer is built — see Known Limitations.
+## Run it yourself
 
-## Local Development
-
-```powershell
-go build ./...
-go test ./...
-go vet ./...
-
-cd dashboard
-npm install
-npm run dev     # proxies /api/* to a local ForgeDB node; see .env.example
-```
-
-## Docker Deployment
-
-```powershell
-cp .env.example .env
-# edit .env: set FORGEDB_API_TOKEN to a random value (e.g. openssl rand -hex 32)
+```bash
+git clone https://github.com/Kushall-07/forgedb.git
+cd forgedb
+cp .env.example .env          # set FORGEDB_API_TOKEN — never commit a real token
 
 docker compose build
 docker compose up -d
 docker compose ps
+
+curl http://127.0.0.1:8090/health                                   # via gateway
+curl -X PUT http://127.0.0.1:8090/kv/foo -H "Authorization: Bearer <token>" -d "bar"
+curl http://127.0.0.1:8090/kv/foo -H "Authorization: Bearer <token>"
 ```
 
-This starts a 3-node Raft cluster (`forgedb-1/2/3`, each with its own
-named volume) plus `forge-gateway`, the leader-aware reverse proxy
-public clients should use. Every published port is bound to
-`127.0.0.1` only — see `docker-compose.yml`'s comments and
-`deploy/README.md` for the full operational guide (health, leader
-discovery, failure testing, persistence, reset).
-
-```powershell
-docker compose down       # stops containers, PRESERVES volumes
-docker compose down -v    # DESTROYS volumes -- do not run this casually
-```
-
-## Azure Deployment
-
-The documented production topology runs all three nodes, the gateway,
-and Caddy on a single Azure VM, fronted by either a temporary
-Cloudflare Quick Tunnel (no inbound firewall rule required, hostname
-changes on every tunnel restart) or a stable Caddy-terminated HTTPS
-hostname (requires DNS plus inbound 80/443 in the VM's NSG) — see
-`deploy/README.md` Section 18 and `docs/deployment/phase16-public-https.md`.
-As of this release the VM's network security group allows only inbound
-SSH; the stable-HTTPS NSG rules described in Section 18.2 are not
-currently applied, consistent with the Cloudflare Quick Tunnel being
-the active public path rather than direct Caddy exposure. This release
-pass could not independently verify the live public endpoint or which
-services are currently running on the VM beyond that it is powered on
-and reachable on port 22 — see Known Limitations.
+Full walkthrough: [`docs/deployment/forgedb-1.0-demo-runbook.md`](docs/deployment/forgedb-1.0-demo-runbook.md) (health, auth, KV lifecycle, leader failure/recovery, snapshots, shutdown).
 
 ## Testing
 
-```powershell
-go test ./...          # all 25 packages; 19 contain tests, all pass
+```bash
+go test ./...     # 25 packages, 19 with tests, all pass
 go vet ./...
 go build ./...
-go test -race ./...    # requires CGO; blocked on this Windows environment (no gcc)
 ```
 
-Test suites of particular note:
+`-race` requires CGO/gcc, unavailable on this Windows dev environment — not a known ForgeDB data race. Notable suites: `internal/raft` (44+ tests incl. snapshot transfer), `internal/dbnode` (restart/recovery), `chaos/` (fault injection), `correctness/` (linearizability checker).
 
-- `internal/raft`: 44+ tests covering snapshots, chunked
-  InstallSnapshot transfer (gap/duplicate/overflow/corruption
-  rejection, restart-safety, supersession), and boundary conditions.
-- `internal/dbnode`: restart/recovery/convergence tests including
-  repeated snapshot-restart cycles and idempotent `Close`.
-- `chaos/`: scripted and seeded-random fault injection (crashes,
-  partitions, persistence/storage faults) against the real `dbnode.Node`
-  composition, checking Raft safety invariants and eventual
-  convergence.
-- `correctness/`: a linearizability checker replaying concurrent
-  operation histories against a reference model.
+<details>
+<summary><strong>Project structure</strong></summary>
 
-This release additionally ran a live, real 3-node Docker cluster
-through: authentication (401/200 paths), CORS preflight behavior, full
-KV PUT/GET/DELETE/404 lifecycle, a real leader `docker stop` →
-election → gateway reroute → old-leader rejoin-and-catch-up cycle,
-snapshot creation on all three nodes, and a graceful-shutdown →
-restart → WAL+snapshot recovery cycle — see the demo runbook for the
-exact steps and observed output.
-
-## Benchmarking
-
-See `benchmark/README.md` for the full methodology (what's measured,
-what explicitly is not safe to compare, determinism, concurrency
-scope) and `docs/benchmarking/phase13-benchmarking.md` for recorded
-results with their git revision, Go version, and hardware. No
-benchmark numbers are reproduced here, to avoid them going stale next
-to code changes; run `go test ./... -run '^$' -bench=.` per that
-README's instructions for current numbers on your own hardware.
-
-## Project Structure
-
-```
-internal/raft           Raft consensus (election, replication, snapshots)
-internal/dbnode         Node composition wiring Raft + storage + state machine
-internal/statemachine   Deduplicating KV state machine
-internal/storage        WAL-backed MemStore (the live storage path)
+```text
+internal/raft                                    Raft consensus
+internal/dbnode                                  Node composition (Raft + storage + state machine)
+internal/statemachine                            Deduplicating KV state machine
+internal/storage                                 WAL-backed MemStore (live path)
 internal/storage/sstable, manifest, compaction   LSM components (not on live path)
-internal/transport      gRPC transport for Raft RPCs
-internal/api            HTTP API, auth, CORS
-internal/gateway        Leader-aware reverse proxy
-internal/config         Environment-driven configuration + validation
-internal/metrics        Prometheus metric definitions
-internal/logging        Structured logging
-chaos/                  Deterministic fault-injection test harness
-correctness/            Linearizability checker
-benchmark/              Benchmarks and end-to-end workload harness
-cmd/forgedb             Node binary
-cmd/forge-gateway        Gateway binary
-cmd/forge-client        Minimal HTTP CLI client
-cmd/forge-chaos         Chaos scenario runner
-dashboard/              React/TypeScript operator dashboard
-deploy/                 Caddyfile, systemd env templates, operational scripts
-docs/                   Per-phase design writeups (architecture, storage, raft, deployment, ...)
+internal/transport                               gRPC transport
+internal/api                                     HTTP API, auth, CORS
+internal/gateway                                 Leader-aware reverse proxy
+chaos/, correctness/                             Fault injection, linearizability checker
+dashboard/                                        React/TypeScript operator dashboard
+deploy/, docs/                                   Deployment scripts, design writeups
 ```
 
-## Design Invariants
+</details>
 
-1. Raft owns replicated ordering.
-2. Only committed entries are applied.
-3. Followers do not independently mutate replicated state.
-4. Raft durability and storage durability are conceptually separate.
-5. Request deduplication survives restarts and snapshots.
-6. Snapshot validation occurs before activation; a partial chunked
-   transfer never becomes an active durable snapshot.
-7. The gateway follows the current leader rather than pinning to one
-   node.
-8. Protected API endpoints require authentication, checked before any
-   protected handler runs.
-9. CORS is allow-listed, never wildcard, by default disabled.
-10. Node ports are private (loopback-only in Docker); the gateway is
-    the intended public entrypoint.
-11. Graceful shutdown drains HTTP, Raft, and storage before exit.
-12. Recovery (WAL + snapshot) reconstructs exactly the committed state
-    that existed before a crash or restart.
+## Limitations
 
-## Known Limitations
-
-- **SSTable/Manifest/Compaction are not on the live write path.** They
-  exist as independently tested packages; `storage.MemStore` never
-  calls into them. See Storage Engine above.
-- **Cluster membership is static.** `PEERS` is fixed at process start
-  for every node and the gateway; there is no add/remove-node
-  operation.
-- **gRPC between nodes is plaintext.** Acceptable only because that
-  traffic stays inside a network not reachable from outside the
-  Docker host, not because the protocol itself is secured.
-- **One shared bearer token, no scopes or rotation.**
-  `FORGEDB_API_TOKEN` authenticates every caller identically; rotating
-  it means restarting every node with a new value.
-- **Dashboard live mode in a deployed (non-dev) build is limited to
-  `/health`.** The dev-proxy token-injection fix in this release only
-  applies to local `npm run dev`; a production SPA build still cannot
-  safely hold a bearer token. See Dashboard above.
-- **Single-host topology.** All three nodes, the gateway, and Caddy
-  run on one Azure VM in the documented deployment; losing that VM
-  loses the cluster regardless of Raft's own replication guarantees.
-- **The Cloudflare Quick Tunnel is temporary by design.** Its hostname
-  changes on every restart and is never committed to tracked
-  configuration.
-- **Windows race-detector testing is environment-blocked.** `go test
-  -race` requires CGO, and no C toolchain (gcc) is present in this
-  environment; this is a toolchain limitation of this machine, not a
-  known ForgeDB data race.
-- **This release's Azure/public-endpoint verification is incomplete.**
-  The VM is powered on and reachable on SSH (confirmed via `az vm
-  list`/NSG inspection), but this pass could not interactively SSH in
-  (the Azure CLI's AAD-certificate SSH flow requires an interactive
-  session this automated pass could not drive) to confirm which
-  services are currently running, or reach the ephemeral Cloudflare
-  Quick Tunnel URL. Nothing on the VM was started, stopped, or
-  modified during this attempt.
-- **No automatic snapshot policy.** `POST /admin/snapshot` is
-  manual/operator-triggered; there is no background compaction
-  trigger.
+- SSTable/Manifest/Compaction exist but aren't on the live write path.
+- Cluster membership is static — no add/remove-node without a restart.
+- Inter-node gRPC is plaintext; one shared bearer token, no scopes/rotation.
+- Deployed (non-dev) dashboard builds can't safely hold a bearer token — live data limited to `/health`.
+- Single-host deployment topology; Azure/public-endpoint status is not independently verified in this release.
+- `-race` testing is blocked on this Windows environment (toolchain, not a code issue).
+- No automatic snapshot policy — `/admin/snapshot` is manual.
 
 ## Future Work
 
-- Dynamic cluster membership (add/remove nodes without a full restart).
-- mTLS or another inter-node transport security mechanism for gRPC.
-- A backend-for-frontend/session layer so a deployed (non-dev)
-  dashboard build can safely reach authenticated endpoints without
-  embedding a long-lived bearer token in client JS.
-- A stable, non-Cloudflare-Quick-Tunnel production ingress as the
-  default rather than an alternate path.
-- Per-caller tokens/scopes in place of the single shared bearer token.
-- Wiring `internal/storage/sstable`/`manifest`/`compaction` into the
-  live write path, if and when MemTable-only storage stops being
-  sufficient.
+Dynamic membership · mTLS for inter-node gRPC · BFF/session layer for the deployed dashboard · stable production ingress · per-caller tokens · wiring SSTable/Manifest/Compaction into the live path · automatic snapshot policy.
 
-These are deliberately out of scope for ForgeDB 1.0.
+---
 
-## Demo
+<div align="center">
 
-See [`docs/deployment/forgedb-1.0-demo-runbook.md`](docs/deployment/forgedb-1.0-demo-runbook.md)
-for an exact, repeatable walkthrough: start the cluster, exercise
-health/auth/CORS/KV, find the leader, fail it over, restart it, trigger
-a snapshot, and shut down cleanly — with the actual output observed
-when this runbook was followed during this release.
+**[v1.0.0](https://github.com/Kushall-07/forgedb/releases/tag/v1.0.0)** · No `LICENSE` file present — all rights reserved until one is added.
 
-## License
-
-No `LICENSE` file is currently present in this repository. In the
-absence of one, default copyright applies (all rights reserved by the
-author) — add a `LICENSE` file before treating this project as open
-for reuse by others.
+</div>
